@@ -1,0 +1,91 @@
+local config = require('liz-diff.config')
+local cache = require('liz-diff.cache')
+local git = require('liz-diff.git')
+local ui = require('liz-diff.ui')
+local diff = require('liz-diff.diff')
+
+local M = {}
+
+M._VERSION = "0.1.0"
+
+local state = {
+  current_keyword = nil,
+  active_jobs = {},
+}
+
+function M.setup(opts)
+  config.merge(opts)
+end
+
+local function format_files(files)
+  local lines = {}
+  for _, file in ipairs(files) do
+    lines[#lines + 1] = ui.format_line(file)
+  end
+  return lines
+end
+
+function M.open()
+  if not git.is_git_repo() then
+    vim.notify('liz-diff: not a git repository', vim.log.levels.WARN)
+    return
+  end
+
+  if ui.is_open() then
+    ui.focus()
+    return
+  end
+
+  local function on_submit(keyword)
+    for _, job_id in ipairs(state.active_jobs) do
+      pcall(vim.fn.jobstop, job_id)
+    end
+    state.active_jobs = {}
+    state.current_keyword = keyword
+
+    local cached = cache.get(keyword)
+    if cached then
+      ui.set_results(format_files(cached.files), cached.cursor_index)
+      ui._set_files_ref(cached.files)
+      return
+    end
+
+    state.active_jobs = git.diff(keyword, function(err, files)
+      if keyword ~= state.current_keyword then
+        if not err and files and #files > 0 then
+          cache.set(keyword, files)
+        end
+        return
+      end
+      state.active_jobs = {}
+      if err then
+        ui.set_error(err)
+      elseif #files == 0 then
+        ui.set_empty(keyword)
+      else
+        cache.set(keyword, files)
+        ui.set_results(format_files(files), 1)
+        ui._set_files_ref(files)
+      end
+    end)
+  end
+
+  local function on_select(file)
+    cache.set_cursor(state.current_keyword, ui.get_cursor_index())
+    ui.close()
+    diff.open(state.current_keyword, file)
+  end
+
+  ui.open(on_submit, on_select)
+
+  if state.current_keyword then
+    local cached = cache.get(state.current_keyword)
+    if cached then
+      ui.set_prompt_text(state.current_keyword)
+      ui.set_results(format_files(cached.files), cached.cursor_index)
+      ui._set_files_ref(cached.files)
+    end
+  end
+end
+
+return M
