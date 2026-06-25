@@ -1,8 +1,8 @@
-local config = require('liz-diff.config')
-local cache = require('liz-diff.cache')
-local git = require('liz-diff.git')
-local ui = require('liz-diff.ui')
-local diff = require('liz-diff.diff')
+local config = require('liz_diff.config')
+local cache = require('liz_diff.cache')
+local git = require('liz_diff.git')
+local ui = require('liz_diff.ui')
+local diff = require('liz_diff.diff')
 
 local M = {}
 

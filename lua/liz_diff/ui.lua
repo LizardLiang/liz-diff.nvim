@@ -1,6 +1,6 @@
 local M = {}
 
-local config = require('liz-diff.config')
+local config = require('liz_diff.config')
 
 local state = {
   prompt_buf = nil,
