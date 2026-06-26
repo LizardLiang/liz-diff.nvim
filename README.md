@@ -1,15 +1,32 @@
 # liz-diff.nvim
 
-A Neovim plugin for browsing git diffs from a centered floating window. Type any git reference — branch, commit, tag, or leave empty for unstaged changes — and navigate changed files directly into side-by-side vimdiff splits.
+> **Browse git diffs in Neovim from a centered floating window.** Diff any branch, commit, tag, or your unstaged working tree, then jump straight into side-by-side **vimdiff** splits — with zero dependencies.
+
+![Neovim](https://img.shields.io/badge/Neovim-0.9+-57A143?logo=neovim&logoColor=white)
+![Made with Lua](https://img.shields.io/badge/made%20with-Lua-2C2D72?logo=lua&logoColor=white)
+![GitHub stars](https://img.shields.io/github/stars/LizardLiang/liz-diff?style=social)
+
+`liz-diff.nvim` is a lightweight **Neovim git diff plugin** written in pure Lua. Pop open a floating window, type any git reference, and browse the changed files — then open each one in a native side-by-side diff. No external diff tool, no heavy UI, no plugin dependencies.
+
+![liz-diff.nvim demo — browse git diffs in a Neovim floating window](https://raw.githubusercontent.com/LizardLiang/liz-diff/master/assets/demo.gif)
+
+## Table of contents
+
+- [Features](#features)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Configuration](#configuration)
+- [How it works](#how-it-works)
 
 ## Features
 
-- Centered float with an input prompt and navigable file list
-- Supports any git reference: branch, commit hash, tag, range (`main..HEAD`), or empty for unstaged changes
-- Per-status vimdiff behavior: added files show empty left pane, deleted files show empty right pane, renamed treated as modified, binary files notify instead of crashing
-- In-memory cache per keyword — same reference re-queries are instant
-- Cursor position remembered per keyword across re-opens
-- Zero dependencies beyond Neovim 0.9+ and git
+- **Centered floating window** with an input prompt and a navigable changed-files list
+- **Any git reference** — branch, commit hash, tag, range (`main..HEAD`), or empty for unstaged working-tree changes
+- **Side-by-side vimdiff** per file status: added files show an empty left pane, deleted files show an empty right pane, renamed files are treated as modified, and binary files notify instead of crashing
+- **In-memory cache per keyword** — re-querying the same reference is instant
+- **Cursor position remembered** per keyword across re-opens
+- **Zero dependencies** beyond Neovim 0.9+ and git
 
 ## Requirements
 
@@ -18,7 +35,7 @@ A Neovim plugin for browsing git diffs from a centered floating window. Type any
 
 ## Installation
 
-**lazy.nvim**
+**[lazy.nvim](https://github.com/folke/lazy.nvim)**
 
 ```lua
 {
@@ -28,7 +45,7 @@ A Neovim plugin for browsing git diffs from a centered floating window. Type any
 }
 ```
 
-**packer.nvim**
+**[packer.nvim](https://github.com/wbthomason/packer.nvim)**
 
 ```lua
 use {
@@ -45,14 +62,14 @@ use {
 :LizDiff
 ```
 
-Opens the floating window. Type a git reference in the prompt and press `<CR>` to load changed files. Leave the prompt empty to see unstaged working tree changes.
+Opens the floating window. Type a git reference in the prompt and press `<CR>` to load the changed files. Leave the prompt empty to see unstaged working-tree changes.
 
 ### Keymaps (inside the float)
 
 | Key           | Action                        |
 | ------------- | ----------------------------- |
 | `<CR>`        | Open selected file in vimdiff |
-| `j` / `k`    | Navigate file list            |
+| `j` / `k`     | Navigate the file list        |
 | `<Esc>` / `q` | Close the float               |
 
 ## Configuration
@@ -77,4 +94,8 @@ require('liz_diff').setup({
 2. Typing a reference and pressing `<CR>` runs `git diff --numstat <ref>` asynchronously.
 3. Results render as `<status> <path> +<insertions> -<deletions>`.
 4. Pressing `<CR>` on a file closes the float and opens a vertical vimdiff split (reference version vs working tree).
-5. Results are cached in memory for the session; the same keyword never re-runs git.
+5. Results are cached in memory for the session, so the same keyword never re-runs git.
+
+---
+
+<sub>**Keywords:** neovim git diff plugin · nvim vimdiff · side-by-side diff · floating window git browser · diff branch/commit/tag · Lua. Maintainer note: set GitHub repo **Topics** (`neovim`, `neovim-plugin`, `nvim`, `lua`, `git`, `diff`, `vimdiff`, `git-diff`) in repo settings for the biggest discoverability boost.</sub>
