@@ -6,7 +6,7 @@ local diff = require('liz_diff.diff')
 
 local M = {}
 
-M._VERSION = "0.1.0"
+M._VERSION = "0.2.0"
 
 local state = {
   current_keyword = nil,
@@ -36,19 +36,12 @@ function M.open()
     return
   end
 
-  local function on_submit(keyword)
+  local function run_diff(keyword, cursor_index)
     for _, job_id in ipairs(state.active_jobs) do
       pcall(vim.fn.jobstop, job_id)
     end
     state.active_jobs = {}
     state.current_keyword = keyword
-
-    local cached = cache.get(keyword)
-    if cached then
-      ui.set_results(format_files(cached.files), cached.cursor_index)
-      ui._set_files_ref(cached.files)
-      return
-    end
 
     state.active_jobs = git.diff(keyword, function(err, files)
       if keyword ~= state.current_keyword then
@@ -64,10 +57,22 @@ function M.open()
         ui.set_empty(keyword)
       else
         cache.set(keyword, files)
-        ui.set_results(format_files(files), 1)
+        ui.set_results(format_files(files), cursor_index)
         ui._set_files_ref(files)
       end
     end)
+  end
+
+  local function on_submit(keyword)
+    run_diff(keyword, 1)
+  end
+
+  local function on_refresh()
+    if state.current_keyword == nil then
+      return
+    end
+    local idx = ui.get_cursor_index()
+    run_diff(state.current_keyword, idx)
   end
 
   local function on_select(file)
@@ -76,7 +81,7 @@ function M.open()
     diff.open(state.current_keyword, file)
   end
 
-  ui.open(on_submit, on_select)
+  ui.open(on_submit, on_select, on_refresh)
 
   if state.current_keyword then
     local cached = cache.get(state.current_keyword)

@@ -94,7 +94,7 @@ function M.set_empty(reference)
   M.set_results({ msg }, 1)
 end
 
-function M.open(on_submit, on_select)
+function M.open(on_submit, on_select, on_refresh)
   local cfg = config.get()
   local editor_width = vim.o.columns
   local editor_height = vim.o.lines
@@ -186,6 +186,10 @@ function M.open(on_submit, on_select)
   end
 
   vim.keymap.set('n', cfg.keymap.open_diff, select_file, { buffer = state.results_buf })
+
+  if on_refresh then
+    vim.keymap.set('n', cfg.keymap.refresh, function() on_refresh() end, { buffer = state.results_buf })
+  end
 
   for _, key in ipairs(cfg.keymap.close) do
     vim.keymap.set('n', key, function() M.close() end, { buffer = state.results_buf })

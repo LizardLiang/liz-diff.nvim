@@ -16,6 +16,7 @@ describe('liz-diff.config', function()
       assert.are.equal('rounded', cfg.border)
       assert.are.same({ '<Esc>', 'q' }, cfg.keymap.close)
       assert.are.equal('<CR>', cfg.keymap.open_diff)
+      assert.are.equal('R', cfg.keymap.refresh)
     end)
 
     it('returns the same reference on successive calls', function()

@@ -7,6 +7,7 @@ local config = {
   keymap = {
     close = { '<Esc>', 'q' },
     open_diff = '<CR>',
+    refresh = 'R',
   },
 }
 

@@ -24,7 +24,8 @@
 - **Centered floating window** with an input prompt and a navigable changed-files list
 - **Any git reference** — branch, commit hash, tag, range (`main..HEAD`), or empty for unstaged working-tree changes
 - **Side-by-side vimdiff** per file status: added files show an empty left pane, deleted files show an empty right pane, renamed files are treated as modified, and binary files notify instead of crashing
-- **In-memory cache per keyword** — re-querying the same reference is instant
+- **In-memory cache per keyword** — reopening the panel restores the last reference's results instantly
+- **Explicit refresh** — `<CR>` always re-fetches on submit, and `R` refreshes the results list in place without leaving the float
 - **Cursor position remembered** per keyword across re-opens
 - **Zero dependencies** beyond Neovim 0.9+ and git
 
@@ -66,11 +67,14 @@ Opens the floating window. Type a git reference in the prompt and press `<CR>` t
 
 ### Keymaps (inside the float)
 
-| Key           | Action                        |
-| ------------- | ----------------------------- |
-| `<CR>`        | Open selected file in vimdiff |
-| `j` / `k`     | Navigate the file list        |
-| `<Esc>` / `q` | Close the float               |
+| Key           | Action                                       |
+| ------------- | --------------------------------------------- |
+| `<CR>`        | Open selected file in vimdiff                 |
+| `R`           | Refresh the file list for the current ref     |
+| `j` / `k`     | Navigate the file list                        |
+| `<Esc>` / `q` | Close the float                               |
+
+Pressing `<CR>` in the prompt always re-runs `git diff` for the typed reference, even if it was already fetched this session — this keeps unstaged working-tree diffs current. Pressing `R` while the results list is focused re-runs `git diff` for the currently displayed reference without leaving the results window, preserving the cursor position. `R` is a no-op until a reference has been submitted at least once.
 
 ## Configuration
 
@@ -84,6 +88,7 @@ require('liz_diff').setup({
   keymap = {
     close     = { '<Esc>', 'q' },
     open_diff = '<CR>',
+    refresh   = 'R',
   },
 })
 ```
@@ -91,10 +96,11 @@ require('liz_diff').setup({
 ## How it works
 
 1. `:LizDiff` opens a centered float with an input prompt.
-2. Typing a reference and pressing `<CR>` runs `git diff --numstat <ref>` asynchronously.
+2. Typing a reference and pressing `<CR>` runs `git diff --numstat <ref>` asynchronously — every submit fetches fresh, even for a previously-seen reference.
 3. Results render as `<status> <path> +<insertions> -<deletions>`.
 4. Pressing `<CR>` on a file closes the float and opens a vertical vimdiff split (reference version vs working tree).
-5. Results are cached in memory for the session, so the same keyword never re-runs git.
+5. Pressing `R` with the results list focused re-runs `git diff` for the currently displayed reference in place, preserving the cursor position (clamped to the new list length).
+6. Each successful fetch is cached in memory so closing and reopening the panel restores the last reference's results and cursor position without a git call.
 
 ---
 
