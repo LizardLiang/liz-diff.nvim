@@ -58,7 +58,8 @@ function M.open(reference, file)
   vim.cmd('diffthis')
   local right_win = vim.api.nvim_get_current_win()
 
-  vim.cmd('vsplit')
+  -- Force the new window to the LEFT regardless of the user's 'splitright'.
+  vim.cmd('leftabove vsplit')
   vim.cmd('enew')
   local ref_buf = vim.api.nvim_get_current_buf()
 

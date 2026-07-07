@@ -19,12 +19,13 @@
 - [Usage](#usage)
 - [Configuration](#configuration)
 - [How it works](#how-it-works)
+- [License](#license)
 
 ## Features
 
 - **Centered floating window** with an input prompt and a navigable changed-files list
 - **Any git reference** — branch, commit hash, tag, range (`main..HEAD`), or empty for unstaged working-tree changes
-- **Side-by-side vimdiff** per file status: added files show an empty left pane, deleted files show an empty right pane, renamed files are treated as modified, and binary files notify instead of crashing
+- **Side-by-side vimdiff** per file status: added files show an empty left pane, deleted files show an empty right pane, renamed files are treated as modified, and — in the `:LizDiff` list flow — binary files notify instead of crashing
 - **In-memory cache per keyword** — reopening the panel restores the last reference's results instantly
 - **Explicit refresh** — `<CR>` always re-fetches on submit, and `R` refreshes the results list in place without leaving the float
 - **Cursor position remembered** per keyword across re-opens
@@ -108,7 +109,8 @@ end, { desc = 'liz-diff: current file vs HEAD' })
 If the file doesn't exist at the given reference (new/untracked file), the
 right pane opens empty instead of erroring, and its buffer name carries a
 ` (new file)` marker so it's clear the blank pane means "absent at that ref"
-rather than a real empty file.
+rather than a real empty file. An unresolvable reference also produces an
+empty right pane, but without the marker or any error.
 
 ## Configuration
 
