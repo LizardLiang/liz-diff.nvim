@@ -6,7 +6,7 @@ local diff = require('liz_diff.diff')
 
 local M = {}
 
-M._VERSION = "0.2.0"
+M._VERSION = "0.3.0"
 
 local state = {
   current_keyword = nil,
@@ -91,6 +91,14 @@ function M.open()
       ui._set_files_ref(cached.files)
     end
   end
+end
+
+function M.open_current(ref)
+  -- No git.is_git_repo() guard here: that check runs against Neovim's
+  -- process cwd, not the buffer's file, and would wrongly refuse a valid
+  -- file when nvim was launched from outside any repo. diff.open_current
+  -- owns the repo check instead, scoped to the buffer's own directory.
+  diff.open_current(ref or 'HEAD')
 end
 
 return M

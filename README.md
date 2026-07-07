@@ -76,6 +76,37 @@ Opens the floating window. Type a git reference in the prompt and press `<CR>` t
 
 Pressing `<CR>` in the prompt always re-runs `git diff` for the typed reference, even if it was already fetched this session — this keeps unstaged working-tree diffs current. Pressing `R` while the results list is focused re-runs `git diff` for the currently displayed reference without leaving the results window, preserving the cursor position. `R` is a no-op until a reference has been submitted at least once.
 
+### `:LizDiffFile` — current file vs a reference
+
+```
+:LizDiffFile [ref]
+```
+
+Skips the floating window entirely: diffs the file in the **current buffer**
+against a git reference (default `HEAD`) with zero prompts. Also available as
+`require('liz_diff').open_current(ref)`.
+
+**Side order is the deliberate opposite of `:LizDiff`**: the working (current
+buffer, including unsaved edits) file is on the **LEFT**, the reference/commit
+version is on the **RIGHT**, and focus returns to the left window. `:LizDiff`'s
+list flow is unchanged (commit left / working right).
+
+```
+:LizDiffFile          " current file vs HEAD
+:LizDiffFile main     " current file vs the main branch
+```
+
+Bind it to `<leader>gd` in your own config:
+
+```lua
+vim.keymap.set('n', '<leader>gd', function()
+  require('liz_diff').open_current()
+end, { desc = 'liz-diff: current file vs HEAD' })
+```
+
+If the file doesn't exist at the given reference (new/untracked file), the
+right pane opens empty instead of erroring.
+
 ## Configuration
 
 Call `setup()` with any overrides (all fields optional):
