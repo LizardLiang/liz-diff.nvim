@@ -21,6 +21,48 @@ function M.cleanup_previous()
   ref_buffers = {}
 end
 
+-- Builds the reference buffer name: `liz-diff://<label>/<path>`, with an
+-- optional ` (new file)` suffix when the path doesn't exist at the reference.
+local function ref_buffer_name(label, path, is_new_file)
+  local name = 'liz-diff://' .. label .. '/' .. path
+  if is_new_file then
+    name = name .. ' (new file)'
+  end
+  return name
+end
+
+-- Opens a vsplit forced to `direction` ('leftabove' or 'rightbelow'),
+-- overriding the user's 'splitright' setting, and creates the read-only
+-- reference-side scratch buffer inside it: filled with `content` (trailing
+-- newline trimmed), named `name`, filetype `filetype`, and marked
+-- buftype=nofile/bufhidden=wipe/noswapfile/nomodifiable. Marks it for
+-- diffthis and tracks it in ref_buffers for the next cleanup_previous().
+-- The new window is left focused; callers restore focus afterward.
+local function open_ref_pane(direction, content, name, filetype)
+  vim.cmd(direction .. ' vsplit')
+  vim.cmd('enew')
+  local ref_buf = vim.api.nvim_get_current_buf()
+
+  local lines = vim.split(content, '\n')
+  if lines[#lines] == '' then
+    lines[#lines] = nil
+  end
+  vim.api.nvim_buf_set_lines(ref_buf, 0, -1, false, lines)
+
+  vim.api.nvim_set_option_value('buftype', 'nofile', { buf = ref_buf })
+  vim.api.nvim_set_option_value('bufhidden', 'wipe', { buf = ref_buf })
+  vim.api.nvim_set_option_value('swapfile', false, { buf = ref_buf })
+  vim.api.nvim_set_option_value('modifiable', false, { buf = ref_buf })
+
+  vim.api.nvim_buf_set_name(ref_buf, name)
+  vim.api.nvim_set_option_value('filetype', filetype, { buf = ref_buf })
+
+  vim.cmd('diffthis')
+  ref_buffers[#ref_buffers + 1] = ref_buf
+
+  return ref_buf
+end
+
 function M.open(reference, file)
   if file.binary then
     vim.notify('liz-diff: binary file, cannot diff', vim.log.levels.INFO)
@@ -58,31 +100,11 @@ function M.open(reference, file)
   vim.cmd('diffthis')
   local right_win = vim.api.nvim_get_current_win()
 
-  -- Force the new window to the LEFT regardless of the user's 'splitright'.
-  vim.cmd('leftabove vsplit')
-  vim.cmd('enew')
-  local ref_buf = vim.api.nvim_get_current_buf()
-
-  local ref_lines = vim.split(ref_content, '\n')
-  if ref_lines[#ref_lines] == '' then
-    ref_lines[#ref_lines] = nil
-  end
-  vim.api.nvim_buf_set_lines(ref_buf, 0, -1, false, ref_lines)
-
-  vim.api.nvim_set_option_value('buftype', 'nofile', { buf = ref_buf })
-  vim.api.nvim_set_option_value('bufhidden', 'wipe', { buf = ref_buf })
-  vim.api.nvim_set_option_value('swapfile', false, { buf = ref_buf })
-  vim.api.nvim_set_option_value('modifiable', false, { buf = ref_buf })
-
   local ref_label = reference == '' and 'INDEX' or reference
-  vim.api.nvim_buf_set_name(ref_buf, 'liz-diff://' .. ref_label .. '/' .. file.filepath)
-
   local ft = vim.filetype.match({ filename = file.filepath }) or ''
-  vim.api.nvim_set_option_value('filetype', ft, { buf = ref_buf })
 
-  vim.cmd('diffthis')
-
-  ref_buffers[#ref_buffers + 1] = ref_buf
+  -- Force the new window to the LEFT regardless of the user's 'splitright'.
+  open_ref_pane('leftabove', ref_content, ref_buffer_name(ref_label, file.filepath), ft)
 
   vim.api.nvim_set_current_win(right_win)
 end
@@ -137,34 +159,10 @@ function M.open_current(reference)
   vim.cmd('diffthis')
   local left_win = vim.api.nvim_get_current_win()
 
-  -- Force the new window to the RIGHT regardless of the user's 'splitright'.
-  vim.cmd('rightbelow vsplit')
-  vim.cmd('enew')
-  local ref_buf = vim.api.nvim_get_current_buf()
-
-  local ref_lines = vim.split(ref_content, '\n')
-  if ref_lines[#ref_lines] == '' then
-    ref_lines[#ref_lines] = nil
-  end
-  vim.api.nvim_buf_set_lines(ref_buf, 0, -1, false, ref_lines)
-
-  vim.api.nvim_set_option_value('buftype', 'nofile', { buf = ref_buf })
-  vim.api.nvim_set_option_value('bufhidden', 'wipe', { buf = ref_buf })
-  vim.api.nvim_set_option_value('swapfile', false, { buf = ref_buf })
-  vim.api.nvim_set_option_value('modifiable', false, { buf = ref_buf })
-
-  local ref_name = 'liz-diff://' .. reference .. '/' .. relpath
-  if is_new_file then
-    ref_name = ref_name .. ' (new file)'
-  end
-  vim.api.nvim_buf_set_name(ref_buf, ref_name)
-
   local ft = vim.filetype.match({ filename = relpath }) or ''
-  vim.api.nvim_set_option_value('filetype', ft, { buf = ref_buf })
 
-  vim.cmd('diffthis')
-
-  ref_buffers[#ref_buffers + 1] = ref_buf
+  -- Force the new window to the RIGHT regardless of the user's 'splitright'.
+  open_ref_pane('rightbelow', ref_content, ref_buffer_name(reference, relpath, is_new_file), ft)
 
   vim.api.nvim_set_current_win(left_win)
 end
