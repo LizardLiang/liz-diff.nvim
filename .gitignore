@@ -1,0 +1,4 @@
+.claude/
+doc/tags
+.DS_Store
+luac.out
