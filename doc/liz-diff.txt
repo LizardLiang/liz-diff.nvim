@@ -8,6 +8,7 @@ CONTENTS                                                   *liz-diff-contents*
     3. Installation ...................... |liz-diff-installation|
     4. Usage ............................. |liz-diff-usage|
        :LizDiff .......................... |:LizDiff|
+       PR / MR review .................... |liz-diff-pr|
        :LizDiffFile ...................... |:LizDiffFile|
     5. Keymaps ........................... |liz-diff-keymaps|
     6. Configuration ..................... |liz-diff-configuration|
@@ -81,6 +82,37 @@ Using packer.nvim: >lua
 
     If Neovim's current working directory is not inside a git work tree,
     |:LizDiff| warns "liz-diff: not a git repository" and does nothing.
+
+                                                                  *liz-diff-pr*
+PR / MR review ~
+
+    Inside the |:LizDiff| prompt, prefix the keyword with `#` or `!`
+    followed by a number to target a pull request / merge request instead
+    of a raw git ref: >
+
+    #123     " GitHub PR 123 (or GitLab MR 123)
+    !45      " same — either prefix works for either forge
+<
+    The plugin lists the PR's changed files (its `base...head` diff) in the
+    usual float. Pressing <CR> on a file opens a READ-ONLY side-by-side
+    diff with the PR base on the LEFT and head on the RIGHT — both panes
+    come from git, so nothing on disk is edited (a PR head is a branch you
+    are reviewing, not your working tree).
+
+    Requirements (optional, only for PR/MR keywords — core |:LizDiff| stays
+    dependency-free):
+    - GitHub: the `gh` CLI, authenticated.
+    - GitLab: the `glab` CLI, authenticated.
+
+    The forge is auto-detected from the `origin` remote host. Commits that
+    are missing locally (common when reviewing others' PRs) are fetched on
+    demand with a brief "fetching #123…" notification. A missing CLI, an
+    undetectable provider, or an unresolvable number yields a clear error,
+    never a crash.
+
+    Note: host detection keys off the strings `github` / `gitlab` in the
+    remote URL, so GitHub Enterprise / self-hosted GitLab on custom domains
+    are not auto-detected yet.
 
                                                                 *:LizDiffFile*
 :LizDiffFile [{ref}]

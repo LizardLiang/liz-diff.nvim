@@ -10,7 +10,10 @@ function M.cleanup_previous()
       local wins = vim.fn.win_findbuf(buf)
       for _, win in ipairs(wins) do
         if vim.api.nvim_win_is_valid(win) then
-          vim.api.nvim_win_close(win, true)
+          -- pcall guards the last-window case (E444): when a PR diff's two
+          -- panes are the only windows, the second close fails; the forced
+          -- buffer delete below then repurposes that window instead.
+          pcall(vim.api.nvim_win_close, win, true)
         end
       end
       if vim.api.nvim_buf_is_valid(buf) then
@@ -31,15 +34,11 @@ local function ref_buffer_name(label, path, is_new_file)
   return name
 end
 
--- Opens a vsplit forced to `direction` ('leftabove' or 'rightbelow'),
--- overriding the user's 'splitright' setting, and creates the read-only
--- reference-side scratch buffer inside it: filled with `content` (trailing
--- newline trimmed), named `name`, filetype `filetype`, and marked
--- buftype=nofile/bufhidden=wipe/noswapfile/nomodifiable. Marks it for
--- diffthis and tracks it in ref_buffers for the next cleanup_previous().
--- The new window is left focused; callers restore focus afterward.
-local function open_ref_pane(direction, content, name, filetype)
-  vim.cmd(direction .. ' vsplit')
+-- Fills the CURRENT window with a fresh read-only reference scratch buffer:
+-- `content` (trailing newline trimmed), named `name`, filetype `filetype`,
+-- marked buftype=nofile/bufhidden=wipe/noswapfile/nomodifiable, marked for
+-- diffthis, and tracked in ref_buffers for the next cleanup_previous().
+local function fill_scratch(content, name, filetype)
   vim.cmd('enew')
   local ref_buf = vim.api.nvim_get_current_buf()
 
@@ -61,6 +60,15 @@ local function open_ref_pane(direction, content, name, filetype)
   ref_buffers[#ref_buffers + 1] = ref_buf
 
   return ref_buf
+end
+
+-- Opens a vsplit forced to `direction` ('leftabove' or 'rightbelow'),
+-- overriding the user's 'splitright' setting, then fills the new window with a
+-- read-only reference scratch buffer via fill_scratch. The new window is left
+-- focused; callers restore focus afterward.
+local function open_ref_pane(direction, content, name, filetype)
+  vim.cmd(direction .. ' vsplit')
+  return fill_scratch(content, name, filetype)
 end
 
 function M.open(reference, file)
@@ -165,6 +173,53 @@ function M.open_current(reference)
   open_ref_pane('rightbelow', ref_content, ref_buffer_name(reference, relpath, is_new_file), ft)
 
   vim.api.nvim_set_current_win(left_win)
+end
+
+-- M.open_pr(pr, file): diffs a PR/MR file with BOTH sides read-only from git —
+-- base (merge-base) on the LEFT, head on the RIGHT. Unlike M.open, neither pane
+-- is the live working file: a PR head is a branch under review, not your tree.
+-- `pr` carries { base_oid, head_oid, merge_base, n } as produced by pr.lua.
+function M.open_pr(pr, file)
+  if file.binary then
+    vim.notify('liz-diff: binary file, cannot diff', vim.log.levels.INFO)
+    return
+  end
+
+  M.cleanup_previous()
+
+  local head_path = file.filepath
+  local base_path = (file.status == 'R' and file.old_path) or file.filepath
+  local base_rev = pr.merge_base or pr.base_oid
+
+  -- LEFT (base) is empty for an added file; RIGHT (head) is empty for a deleted
+  -- file. A failed `git show` (e.g. side absent) yields a blank pane, not an error.
+  local base_content = ''
+  if file.status ~= 'A' then
+    local out = vim.fn.system({ 'git', 'show', base_rev .. ':' .. base_path })
+    if vim.v.shell_error == 0 then
+      base_content = out
+    end
+  end
+
+  local head_content = ''
+  if file.status ~= 'D' then
+    local out = vim.fn.system({ 'git', 'show', pr.head_oid .. ':' .. head_path })
+    if vim.v.shell_error == 0 then
+      head_content = out
+    end
+  end
+
+  local ft = vim.filetype.match({ filename = file.filepath }) or ''
+  local label = 'PR#' .. tostring(pr.n)
+
+  -- RIGHT pane = head, in the current window.
+  fill_scratch(head_content, ref_buffer_name(label .. ' head', head_path), ft)
+  local right_win = vim.api.nvim_get_current_win()
+
+  -- Force the base pane to the LEFT regardless of the user's 'splitright'.
+  open_ref_pane('leftabove', base_content, ref_buffer_name(label .. ' base', base_path), ft)
+
+  vim.api.nvim_set_current_win(right_win)
 end
 
 return M

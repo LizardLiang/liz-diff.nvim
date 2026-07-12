@@ -25,6 +25,7 @@
 
 - **Centered floating window** with an input prompt and a navigable changed-files list
 - **Any git reference** — branch, commit hash, tag, range (`main..HEAD`), or empty for unstaged working-tree changes
+- **Pull / merge request review** — prefix the prompt with `#` or `!` (e.g. `#123`) to browse a GitHub PR or GitLab MR's `base...head` diff, read-only base-left / head-right (needs the `gh` / `glab` CLI; core stays zero-dependency)
 - **Side-by-side vimdiff** per file status: added files show an empty left pane, deleted files show an empty right pane, renamed files are treated as modified, and — in the `:LizDiff` list flow — binary files notify instead of crashing
 - **In-memory cache per keyword** — reopening the panel restores the last reference's results instantly
 - **Explicit refresh** — `<CR>` always re-fetches on submit, and `R` refreshes the results list in place without leaving the float
@@ -111,6 +112,38 @@ right pane opens empty instead of erroring, and its buffer name carries a
 ` (new file)` marker so it's clear the blank pane means "absent at that ref"
 rather than a real empty file. An unresolvable reference also produces an
 empty right pane, but without the marker or any error.
+
+### Reviewing a pull / merge request
+
+Inside the `:LizDiff` prompt, prefix the keyword with **`#`** (or **`!`**) followed
+by a number to target a pull request / merge request instead of a raw git ref:
+
+```
+#123     " GitHub PR 123 (or GitLab MR 123)
+!45      " same — either prefix works for either forge
+```
+
+The plugin lists the PR's changed files (its `base...head` diff) in the usual
+float; pressing `<CR>` on a file opens a **read-only** side-by-side diff with the
+PR **base on the LEFT** and **head on the RIGHT**. Both panes come straight from
+git — a PR head is a branch you're reviewing, not your working tree, so nothing on
+disk is edited.
+
+**Requirements for this feature (optional, only for PR/MR keywords):**
+
+- GitHub → the [`gh`](https://cli.github.com/) CLI, authenticated.
+- GitLab → the [`glab`](https://gitlab.com/gitlab-org/cli) CLI, authenticated.
+
+The forge is auto-detected from your `origin` remote's host. Missing commits
+(common when reviewing someone else's PR) are fetched on demand — you'll see a
+brief `fetching #123…` notification. If the required CLI isn't installed, the
+provider can't be detected, or the number can't be resolved, you get a clear
+message rather than a crash.
+
+> **Note:** host detection keys off the strings `github` / `gitlab` in the remote
+> URL, so GitHub Enterprise / self-hosted GitLab instances on custom domains
+> aren't auto-detected yet. Everything else (raw `:LizDiff` refs) is unaffected
+> and still needs no external tools.
 
 ## Configuration
 

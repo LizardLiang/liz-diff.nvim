@@ -142,7 +142,7 @@ function M.open(on_submit, on_select, on_refresh)
 
   local placeholder_ns = vim.api.nvim_create_namespace('liz_diff_placeholder')
   vim.api.nvim_buf_set_extmark(state.prompt_buf, placeholder_ns, 0, 0, {
-    virt_text = { { 'Enter git ref (branch, tag, commit)... ', 'Comment' } },
+    virt_text = { { 'Enter git ref, or #<PR> / !<MR>... ', 'Comment' } },
     virt_text_pos = 'overlay',
     hl_mode = 'combine',
   })
@@ -155,7 +155,7 @@ function M.open(on_submit, on_select, on_refresh)
         vim.api.nvim_buf_clear_namespace(state.prompt_buf, placeholder_ns, 0, -1)
       else
         vim.api.nvim_buf_set_extmark(state.prompt_buf, placeholder_ns, 0, 0, {
-          virt_text = { { 'Enter git ref (branch, tag, commit)... ', 'Comment' } },
+          virt_text = { { 'Enter git ref, or #<PR> / !<MR>... ', 'Comment' } },
           virt_text_pos = 'overlay',
           hl_mode = 'combine',
         })
