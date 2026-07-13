@@ -1,5 +1,13 @@
 require('tests.helpers')
 
+-- Captured before any `it()` runs (describe bodies execute immediately at
+-- file load; it/before_each bodies are deferred). Several tests below
+-- permanently overwrite vim.fn.system / vim.v to mock git output — the
+-- real-git integration tests further down restore these originals so they
+-- observe genuine shell_error / system() results regardless of test order.
+local REAL_SYSTEM = vim.fn.system
+local REAL_VIM_V = vim.v
+
 describe('liz-diff.git', function()
   local git
 
@@ -272,6 +280,216 @@ describe('liz-diff.git', function()
       vim.fn.system = function() return '' end
       vim.v = { shell_error = 128 }
       assert.is_false(git.is_git_repo())
+    end)
+  end)
+
+  describe('append_untracked()', function()
+    it('appends untracked entries after tracked results', function()
+      local files = { { status = 'M', filepath = 'a.lua' } }
+      local untracked = { { status = 'A', filepath = 'b.lua' } }
+      local result = git.append_untracked(files, untracked)
+      assert.are.equal(2, #result)
+      assert.are.equal('a.lua', result[1].filepath)
+      assert.are.equal('b.lua', result[2].filepath)
+    end)
+
+    it('skips an untracked path already present in tracked results', function()
+      local files = { { status = 'M', filepath = 'a.lua' } }
+      local untracked = {
+        { status = 'A', filepath = 'a.lua' },
+        { status = 'A', filepath = 'c.lua' },
+      }
+      local result = git.append_untracked(files, untracked)
+      assert.are.equal(2, #result)
+      assert.are.equal('a.lua', result[1].filepath)
+      assert.are.equal('c.lua', result[2].filepath)
+    end)
+
+    it('returns tracked results unchanged when there are no untracked entries', function()
+      local files = { { status = 'M', filepath = 'a.lua' } }
+      local result = git.append_untracked(files, {})
+      assert.are.equal(1, #result)
+      assert.are.equal('a.lua', result[1].filepath)
+    end)
+  end)
+
+  -- Real-filesystem / real-git integration tests for the untracked-files
+  -- feature. Restores REAL_SYSTEM / REAL_VIM_V first, since earlier tests in
+  -- this file permanently overwrite vim.fn.system / vim.v with mocks.
+  describe('untracked files integration', function()
+    local tmp_dir
+    local prev_cwd
+
+    local function write_file(path, content)
+      local f = assert(io.open(path, 'wb'))
+      f:write(content)
+      f:close()
+    end
+
+    local function sh(args)
+      local out = vim.fn.system(args)
+      assert.are.equal(0, vim.v.shell_error, 'command failed: ' .. table.concat(args, ' ') .. '\n' .. tostring(out))
+      return out
+    end
+
+    before_each(function()
+      vim.fn.system = REAL_SYSTEM
+      vim.v = REAL_VIM_V
+
+      tmp_dir = vim.fn.tempname()
+      vim.fn.mkdir(tmp_dir, 'p')
+      prev_cwd = vim.fn.getcwd()
+      vim.fn.chdir(tmp_dir)
+
+      sh({ 'git', 'init', '-q' })
+      sh({ 'git', 'config', 'user.email', 'test@example.com' })
+      sh({ 'git', 'config', 'user.name', 'test' })
+    end)
+
+    after_each(function()
+      vim.fn.chdir(prev_cwd)
+      vim.fn.delete(tmp_dir, 'rf')
+    end)
+
+    describe('list_untracked()', function()
+      it('lists untracked files, respecting .gitignore, incl. a path with a space', function()
+        write_file('.gitignore', '*.log\n')
+        write_file('ignored.log', 'x')
+        write_file('plain.txt', 'hello\n')
+        write_file('file with space.txt', 'hi\n')
+
+        local done, err, paths
+        git.list_untracked(function(e, p)
+          err, paths, done = e, p, true
+        end)
+        assert.is_true(vim.wait(3000, function() return done end))
+
+        assert.is_nil(err)
+        table.sort(paths)
+        assert.are.same({ '.gitignore', 'file with space.txt', 'plain.txt' }, paths)
+      end)
+
+      it('returns an empty list when there are no untracked files', function()
+        local done, err, paths
+        git.list_untracked(function(e, p)
+          err, paths, done = e, p, true
+        end)
+        assert.is_true(vim.wait(3000, function() return done end))
+
+        assert.is_nil(err)
+        assert.are.equal(0, #paths)
+      end)
+    end)
+
+    describe('untracked_stats()', function()
+      it('counts lines for a file with a trailing newline', function()
+        write_file('a.txt', 'line1\nline2\nline3\n')
+        local entries = git.untracked_stats({ 'a.txt' })
+        assert.are.equal(1, #entries)
+        assert.are.equal('A', entries[1].status)
+        assert.are.equal('a.txt', entries[1].filepath)
+        assert.are.equal(3, entries[1].insertions)
+        assert.are.equal(0, entries[1].deletions)
+        assert.is_false(entries[1].binary)
+      end)
+
+      it('counts a final fragment without a trailing newline as a line', function()
+        write_file('b.txt', 'line1\nline2')
+        local entries = git.untracked_stats({ 'b.txt' })
+        assert.are.equal(2, entries[1].insertions)
+      end)
+
+      it('detects binary files via a NUL byte in the first 8KB', function()
+        write_file('bin.dat', 'abc\0def')
+        local entries = git.untracked_stats({ 'bin.dat' })
+        assert.is_true(entries[1].binary)
+        assert.are.equal(0, entries[1].insertions)
+      end)
+
+      it('returns a zero-count entry for an empty file', function()
+        write_file('empty.txt', '')
+        local entries = git.untracked_stats({ 'empty.txt' })
+        assert.are.equal(0, entries[1].insertions)
+        assert.is_false(entries[1].binary)
+      end)
+    end)
+
+    describe('diff() with untracked files', function()
+      local function run_diff(reference)
+        local done, err, files
+        git.diff(reference, function(e, f)
+          err, files, done = e, f, true
+        end)
+        assert.is_true(vim.wait(3000, function() return done end))
+        return err, files
+      end
+
+      local function find(files, filepath)
+        for _, f in ipairs(files) do
+          if f.filepath == filepath then
+            return f
+          end
+        end
+        return nil
+      end
+
+      it('includes untracked and staged-new files for the empty prompt against HEAD', function()
+        write_file('tracked.txt', 'v1\n')
+        sh({ 'git', 'add', 'tracked.txt' })
+        sh({ 'git', 'commit', '-q', '-m', 'init' })
+        write_file('tracked.txt', 'v1\nv2\n')
+        write_file('untracked.txt', 'brand new\n')
+        write_file('staged.txt', 'staged\n')
+        sh({ 'git', 'add', 'staged.txt' })
+
+        local err, files = run_diff('')
+        assert.is_nil(err)
+
+        local tracked_mod = find(files, 'tracked.txt')
+        assert.is_not_nil(tracked_mod)
+        assert.are.equal('M', tracked_mod.status)
+
+        local staged_new = find(files, 'staged.txt')
+        assert.is_not_nil(staged_new)
+        assert.are.equal('A', staged_new.status)
+
+        local untracked = find(files, 'untracked.txt')
+        assert.is_not_nil(untracked)
+        assert.are.equal('A', untracked.status)
+      end)
+
+      it('falls back to a bare diff on an unborn HEAD and still includes untracked files', function()
+        write_file('loose.txt', 'x\n')
+
+        local err, files = run_diff('')
+        assert.is_nil(err)
+
+        local loose = find(files, 'loose.txt')
+        assert.is_not_nil(loose)
+        assert.are.equal('A', loose.status)
+      end)
+
+      it('excludes untracked files for a two-dot commit range', function()
+        sh({ 'git', 'commit', '-q', '--allow-empty', '-m', 'init' })
+        sh({ 'git', 'branch', 'base' })
+        sh({ 'git', 'commit', '-q', '--allow-empty', '-m', 'second' })
+        write_file('untracked.txt', 'x\n')
+
+        local err, files = run_diff('base..HEAD')
+        assert.is_nil(err)
+        assert.is_nil(find(files, 'untracked.txt'))
+      end)
+
+      it('excludes untracked files for a three-dot commit range', function()
+        sh({ 'git', 'commit', '-q', '--allow-empty', '-m', 'init' })
+        sh({ 'git', 'branch', 'base' })
+        sh({ 'git', 'commit', '-q', '--allow-empty', '-m', 'second' })
+        write_file('untracked.txt', 'x\n')
+
+        local err, files = run_diff('base...HEAD')
+        assert.is_nil(err)
+        assert.is_nil(find(files, 'untracked.txt'))
+      end)
     end)
   end)
 end)

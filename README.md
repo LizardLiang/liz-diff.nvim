@@ -24,7 +24,7 @@
 ## Features
 
 - **Centered floating window** with an input prompt and a navigable changed-files list
-- **Any git reference** — branch, commit hash, tag, range (`main..HEAD`), or empty for unstaged working-tree changes
+- **Any git reference** — branch, commit hash, tag, range (`main..HEAD`), or empty for all uncommitted changes (staged + unstaged + untracked)
 - **Pull / merge request review** — prefix the prompt with `#` or `!` (e.g. `#123`) to browse a GitHub PR or GitLab MR's `base...head` diff, read-only base-left / head-right (needs the `gh` / `glab` CLI; core stays zero-dependency)
 - **Side-by-side vimdiff** per file status: added files show an empty left pane, deleted files show an empty right pane, renamed files are treated as modified, and — in the `:LizDiff` list flow — binary files notify instead of crashing
 - **In-memory cache per keyword** — reopening the panel restores the last reference's results instantly
@@ -66,7 +66,7 @@ use {
 :LizDiff
 ```
 
-Opens the floating window. Type a git reference in the prompt and press `<CR>` to load the changed files. Leave the prompt empty to see unstaged working-tree changes.
+Opens the floating window. Type a git reference in the prompt and press `<CR>` to load the changed files. Leave the prompt empty to see all uncommitted changes (staged + unstaged + untracked).
 
 ### Keymaps (inside the float)
 

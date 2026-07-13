@@ -81,6 +81,16 @@ describe('liz-diff.ui', function()
     end)
   end)
 
+  describe('empty_message()', function()
+    it('describes the empty prompt as all uncommitted changes', function()
+      assert.are.equal('No uncommitted changes found', ui.empty_message(''))
+    end)
+
+    it('names the reference for a non-empty, unmatched reference', function()
+      assert.are.equal('No changes found for main', ui.empty_message('main'))
+    end)
+  end)
+
   -- Integration tests for open/close/set_results require Neovim runtime.
   -- Mark as pending for TDD — implement when running under plenary/vusted.
 

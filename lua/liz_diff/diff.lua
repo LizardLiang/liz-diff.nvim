@@ -26,12 +26,25 @@ end
 
 -- Builds the reference buffer name: `liz-diff://<label>/<path>`, with an
 -- optional ` (new file)` suffix when the path doesn't exist at the reference.
-local function ref_buffer_name(label, path, is_new_file)
+-- Exported (pure, no Neovim window/buffer calls) so pane naming is directly
+-- unit-testable without standing up real splits.
+function M.ref_buffer_name(label, path, is_new_file)
   local name = 'liz-diff://' .. label .. '/' .. path
   if is_new_file then
     name = name .. ' (new file)'
   end
   return name
+end
+
+-- M.open's reference rev/label for a given prompt reference: empty prompt
+-- now means "against HEAD" (all uncommitted changes), matching git.lua's
+-- M.diff baseline change. Exported for the same reason as ref_buffer_name.
+function M.ref_rev(reference)
+  return reference == '' and 'HEAD:' or (reference .. ':')
+end
+
+function M.ref_label(reference)
+  return reference == '' and 'HEAD' or reference
 end
 
 -- Fills the CURRENT window with a fresh read-only reference scratch buffer:
@@ -88,8 +101,7 @@ function M.open(reference, file)
 
   local ref_content = ''
   if file.status ~= 'A' then
-    local rev = reference == '' and ':' or (reference .. ':')
-    local result = vim.fn.system({ 'git', 'show', rev .. source_path })
+    local result = vim.fn.system({ 'git', 'show', M.ref_rev(reference) .. source_path })
     if vim.v.shell_error == 0 then
       ref_content = result
     end
@@ -108,11 +120,11 @@ function M.open(reference, file)
   vim.cmd('diffthis')
   local right_win = vim.api.nvim_get_current_win()
 
-  local ref_label = reference == '' and 'INDEX' or reference
+  local ref_label = M.ref_label(reference)
   local ft = vim.filetype.match({ filename = file.filepath }) or ''
 
   -- Force the new window to the LEFT regardless of the user's 'splitright'.
-  open_ref_pane('leftabove', ref_content, ref_buffer_name(ref_label, file.filepath), ft)
+  open_ref_pane('leftabove', ref_content, M.ref_buffer_name(ref_label, file.filepath, file.status == 'A'), ft)
 
   vim.api.nvim_set_current_win(right_win)
 end
@@ -170,7 +182,7 @@ function M.open_current(reference)
   local ft = vim.filetype.match({ filename = relpath }) or ''
 
   -- Force the new window to the RIGHT regardless of the user's 'splitright'.
-  open_ref_pane('rightbelow', ref_content, ref_buffer_name(reference, relpath, is_new_file), ft)
+  open_ref_pane('rightbelow', ref_content, M.ref_buffer_name(reference, relpath, is_new_file), ft)
 
   vim.api.nvim_set_current_win(left_win)
 end
@@ -213,11 +225,11 @@ function M.open_pr(pr, file)
   local label = 'PR#' .. tostring(pr.n)
 
   -- RIGHT pane = head, in the current window.
-  fill_scratch(head_content, ref_buffer_name(label .. ' head', head_path), ft)
+  fill_scratch(head_content, M.ref_buffer_name(label .. ' head', head_path), ft)
   local right_win = vim.api.nvim_get_current_win()
 
   -- Force the base pane to the LEFT regardless of the user's 'splitright'.
-  open_ref_pane('leftabove', base_content, ref_buffer_name(label .. ' base', base_path), ft)
+  open_ref_pane('leftabove', base_content, M.ref_buffer_name(label .. ' base', base_path), ft)
 
   vim.api.nvim_set_current_win(right_win)
 end

@@ -7,7 +7,7 @@ local pr = require('liz_diff.pr')
 
 local M = {}
 
-M._VERSION = "0.4.0"
+M._VERSION = "0.5.0"
 
 local state = {
   current_keyword = nil,

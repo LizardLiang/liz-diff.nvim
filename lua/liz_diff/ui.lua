@@ -89,9 +89,14 @@ function M.set_error(message)
   M.set_results(lines, 1)
 end
 
+-- Pure message builder, extracted from set_empty() so the wording can be
+-- unit-tested without a live results buffer/window.
+function M.empty_message(reference)
+  return reference == '' and 'No uncommitted changes found' or ('No changes found for ' .. reference)
+end
+
 function M.set_empty(reference)
-  local msg = reference == '' and 'No unstaged changes found' or ('No changes found for ' .. reference)
-  M.set_results({ msg }, 1)
+  M.set_results({ M.empty_message(reference) }, 1)
 end
 
 function M.open(on_submit, on_select, on_refresh)

@@ -133,57 +133,195 @@ local function run_git(args, on_done)
   return job_id
 end
 
+-- True when HEAD resolves to a commit. Locale-independent: exit-code only,
+-- same convention as M.is_new_file — never parse git's (translatable) error
+-- text. False on a brand-new repo with no commits yet ("unborn HEAD").
+local function head_resolves()
+  vim.fn.system({ 'git', 'rev-parse', '--verify', '--quiet', 'HEAD' })
+  return vim.v.shell_error == 0
+end
+
+-- Neovim's job transport rewrites embedded NUL bytes to NL when delivering
+-- stdout to Lua callbacks (see :h channel-lines), so `git ls-files -z`
+-- output arrives as newline-joined text rather than genuinely NUL-separated
+-- chunks. Concatenating every buffered chunk and re-splitting on '\n'
+-- recovers the individual paths regardless of how Neovim chunked delivery,
+-- and -z sidesteps git's C-quoting of non-ASCII/space paths at the source.
+local function split_nul_lines(lines)
+  local text = table.concat(lines, '\n')
+  local paths = {}
+  for path in text:gmatch('[^\n]+') do
+    paths[#paths + 1] = path
+  end
+  return paths
+end
+
+-- Async job listing untracked (never-added) files, respecting .gitignore.
+-- callback(err, paths). Returns the job id for M.diff's cancellation list.
+function M.list_untracked(callback)
+  return run_git({ 'git', 'ls-files', '--others', '--exclude-standard', '-z' }, function(err, lines)
+    if err then
+      callback(err, nil)
+      return
+    end
+    callback(nil, split_nul_lines(lines or {}))
+  end)
+end
+
+-- Lines in `content`: a trailing fragment without a terminating newline still
+-- counts as one line (mirrors `git numstat`'s treatment, within ±1 on files
+-- missing a final newline).
+local function count_lines(content)
+  if content == '' then
+    return 0
+  end
+  local n = 0
+  for _ in content:gmatch('\n') do
+    n = n + 1
+  end
+  if content:sub(-1) ~= '\n' then
+    n = n + 1
+  end
+  return n
+end
+
+-- Builds diff-list entries for untracked `paths` via pure Lua file reads (no
+-- per-file git process — identical behavior on Windows). Binary is detected
+-- by a NUL byte in the first 8KB; otherwise lines are counted for
+-- `insertions` (deletions always 0, since there's nothing to compare
+-- against). A path that can no longer be opened yields a zero-count entry
+-- rather than erroring the whole list.
+function M.untracked_stats(paths)
+  local entries = {}
+  for _, path in ipairs(paths) do
+    local binary = false
+    local insertions = 0
+    local f = io.open(path, 'rb')
+    if f then
+      -- Check only the first 8KB for a NUL byte before deciding whether to
+      -- read the rest — avoids pulling large binary files fully into memory
+      -- (and stalling the UI thread) just to discard them.
+      local head = f:read(8192) or ''
+      binary = head:find('\0', 1, true) ~= nil
+      if binary then
+        f:close()
+      else
+        local rest = f:read('*a') or ''
+        f:close()
+        insertions = count_lines(head .. rest)
+      end
+    end
+    entries[#entries + 1] = {
+      status = 'A',
+      filepath = path,
+      insertions = insertions,
+      deletions = 0,
+      binary = binary,
+    }
+  end
+  return entries
+end
+
+-- Appends `untracked_entries` after `files`, skipping any filepath already
+-- present (e.g. a staged-new file also reported as untracked would be a
+-- contradiction in practice, but this keeps the merge defensive).
+function M.append_untracked(files, untracked_entries)
+  local seen = {}
+  for _, f in ipairs(files) do
+    seen[f.filepath] = true
+  end
+  local results = {}
+  for _, f in ipairs(files) do
+    results[#results + 1] = f
+  end
+  for _, u in ipairs(untracked_entries) do
+    if not seen[u.filepath] then
+      results[#results + 1] = u
+      seen[u.filepath] = true
+    end
+  end
+  return results
+end
+
 function M.diff(reference, callback)
   local cmd1 = { 'git', 'diff', '--name-status' }
   local cmd2 = { 'git', 'diff', '--numstat' }
+
   if reference ~= '' then
     cmd1[#cmd1 + 1] = reference
     cmd2[#cmd2 + 1] = reference
+  elseif head_resolves() then
+    -- Empty prompt now means "all uncommitted changes": worktree + index vs
+    -- HEAD, instead of the old bare index diff. Skipped entirely on an
+    -- unborn HEAD (no commits yet) — falls back to the original bare
+    -- `git diff` commands built above.
+    cmd1[#cmd1 + 1] = 'HEAD'
+    cmd2[#cmd2 + 1] = 'HEAD'
   end
 
+  -- Untracked files are included for the empty prompt and single-ref
+  -- prompts, but never for commit ranges (`a..b`, `a...b`, incl. the PR
+  -- flow's `base...head`) — those compare commits, not the worktree.
+  local include_untracked = not reference:find('%.%.')
+
+  local expected_jobs = include_untracked and 3 or 2
   local done_count = 0
-  local name_status_lines, numstat_lines
+  local name_status_lines, numstat_lines, untracked_paths
   local had_error = false
+
+  local function fail(err)
+    if not had_error then
+      had_error = true
+      callback(err, nil)
+    end
+  end
 
   local function check_done()
     done_count = done_count + 1
-    if done_count < 2 then
-      return
-    end
-    if had_error then
+    if done_count < expected_jobs or had_error then
       return
     end
     local ns = M.parse_name_status(name_status_lines)
     local stat = M.parse_numstat(numstat_lines)
     local files = M.merge_results(ns, stat)
+    if include_untracked then
+      files = M.append_untracked(files, M.untracked_stats(untracked_paths or {}))
+    end
     callback(nil, files)
   end
 
-  local job1 = run_git(cmd1, function(err, lines)
+  local jobs = {}
+
+  jobs[#jobs + 1] = run_git(cmd1, function(err, lines)
     if err then
-      if not had_error then
-        had_error = true
-        callback(err, nil)
-      end
+      fail(err)
       return
     end
     name_status_lines = lines
     check_done()
   end)
 
-  local job2 = run_git(cmd2, function(err, lines)
+  jobs[#jobs + 1] = run_git(cmd2, function(err, lines)
     if err then
-      if not had_error then
-        had_error = true
-        callback(err, nil)
-      end
+      fail(err)
       return
     end
     numstat_lines = lines
     check_done()
   end)
 
-  return { job1, job2 }
+  if include_untracked then
+    jobs[#jobs + 1] = M.list_untracked(function(err, paths)
+      if err then
+        fail(err)
+        return
+      end
+      untracked_paths = paths
+      check_done()
+    end)
+  end
+
+  return jobs
 end
 
 return M
