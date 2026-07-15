@@ -283,6 +283,26 @@ describe('liz-diff.git', function()
     end)
   end)
 
+  describe('repo_root()', function()
+    it('returns the trimmed toplevel path on success', function()
+      vim.fn.system = function() return '/home/user/repo\n' end
+      vim.v = { shell_error = 0 }
+      assert.are.equal('/home/user/repo', git.repo_root())
+    end)
+
+    it('trims surrounding whitespace from the toplevel path', function()
+      vim.fn.system = function() return '  /home/user/repo  \n' end
+      vim.v = { shell_error = 0 }
+      assert.are.equal('/home/user/repo', git.repo_root())
+    end)
+
+    it('returns nil when the cwd is not inside a work tree', function()
+      vim.fn.system = function() return '' end
+      vim.v = { shell_error = 128 }
+      assert.is_nil(git.repo_root())
+    end)
+  end)
+
   describe('append_untracked()', function()
     it('appends untracked entries after tracked results', function()
       local files = { { status = 'M', filepath = 'a.lua' } }
@@ -359,7 +379,7 @@ describe('liz-diff.git', function()
         write_file('file with space.txt', 'hi\n')
 
         local done, err, paths
-        git.list_untracked(function(e, p)
+        git.list_untracked(tmp_dir, function(e, p)
           err, paths, done = e, p, true
         end)
         assert.is_true(vim.wait(3000, function() return done end))
@@ -371,7 +391,7 @@ describe('liz-diff.git', function()
 
       it('returns an empty list when there are no untracked files', function()
         local done, err, paths
-        git.list_untracked(function(e, p)
+        git.list_untracked(tmp_dir, function(e, p)
           err, paths, done = e, p, true
         end)
         assert.is_true(vim.wait(3000, function() return done end))
@@ -379,12 +399,35 @@ describe('liz-diff.git', function()
         assert.is_nil(err)
         assert.are.equal(0, #paths)
       end)
+
+      -- Path-relativity regression coverage (Hermes BLOCKER): `git ls-files`
+      -- is cwd-relative by default, unlike `git diff --name-status`, which is
+      -- always root-relative regardless of cwd. Scoping list_untracked to
+      -- `root` via `-C` must produce root-relative paths (and cover the
+      -- WHOLE repo, not just the subtree under Neovim's cwd) even when
+      -- invoked while the process cwd sits in a repo subdirectory.
+      it('returns root-relative paths covering the whole repo when cwd is a subdirectory', function()
+        vim.fn.mkdir(tmp_dir .. '/sub', 'p')
+        write_file('sub/nested.txt', 'x\n')
+        write_file('top.txt', 'y\n')
+        vim.fn.chdir(tmp_dir .. '/sub')
+
+        local done, err, paths
+        git.list_untracked(tmp_dir, function(e, p)
+          err, paths, done = e, p, true
+        end)
+        assert.is_true(vim.wait(3000, function() return done end))
+
+        assert.is_nil(err)
+        table.sort(paths)
+        assert.are.same({ 'sub/nested.txt', 'top.txt' }, paths)
+      end)
     end)
 
     describe('untracked_stats()', function()
       it('counts lines for a file with a trailing newline', function()
         write_file('a.txt', 'line1\nline2\nline3\n')
-        local entries = git.untracked_stats({ 'a.txt' })
+        local entries = git.untracked_stats(tmp_dir, { 'a.txt' })
         assert.are.equal(1, #entries)
         assert.are.equal('A', entries[1].status)
         assert.are.equal('a.txt', entries[1].filepath)
@@ -395,21 +438,39 @@ describe('liz-diff.git', function()
 
       it('counts a final fragment without a trailing newline as a line', function()
         write_file('b.txt', 'line1\nline2')
-        local entries = git.untracked_stats({ 'b.txt' })
+        local entries = git.untracked_stats(tmp_dir, { 'b.txt' })
         assert.are.equal(2, entries[1].insertions)
       end)
 
       it('detects binary files via a NUL byte in the first 8KB', function()
         write_file('bin.dat', 'abc\0def')
-        local entries = git.untracked_stats({ 'bin.dat' })
+        local entries = git.untracked_stats(tmp_dir, { 'bin.dat' })
         assert.is_true(entries[1].binary)
         assert.are.equal(0, entries[1].insertions)
       end)
 
       it('returns a zero-count entry for an empty file', function()
         write_file('empty.txt', '')
-        local entries = git.untracked_stats({ 'empty.txt' })
+        local entries = git.untracked_stats(tmp_dir, { 'empty.txt' })
         assert.are.equal(0, entries[1].insertions)
+        assert.is_false(entries[1].binary)
+      end)
+
+      -- Path-relativity regression coverage: paths returned by list_untracked
+      -- are root-relative, but io.open resolves relative paths against
+      -- Neovim's process cwd, not root. When cwd differs from root (e.g.
+      -- nvim launched in a subdirectory), untracked_stats must join `root`
+      -- onto the path itself to find the file on disk, while still reporting
+      -- the root-relative path in the entry (matching tracked entries).
+      it('reads file content by joining root onto the path when cwd differs from root', function()
+        vim.fn.mkdir(tmp_dir .. '/sub', 'p')
+        write_file('sub/nested.txt', 'line1\nline2\n')
+        vim.fn.chdir(tmp_dir .. '/sub')
+
+        local entries = git.untracked_stats(tmp_dir, { 'sub/nested.txt' })
+        assert.are.equal(1, #entries)
+        assert.are.equal('sub/nested.txt', entries[1].filepath)
+        assert.are.equal(2, entries[1].insertions)
         assert.is_false(entries[1].binary)
       end)
     end)
@@ -417,7 +478,7 @@ describe('liz-diff.git', function()
     describe('diff() with untracked files', function()
       local function run_diff(reference)
         local done, err, files
-        git.diff(reference, function(e, f)
+        git.diff(reference, tmp_dir, function(e, f)
           err, files, done = e, f, true
         end)
         assert.is_true(vim.wait(3000, function() return done end))
@@ -489,6 +550,34 @@ describe('liz-diff.git', function()
         local err, files = run_diff('base...HEAD')
         assert.is_nil(err)
         assert.is_nil(find(files, 'untracked.txt'))
+      end)
+
+      -- Path-relativity regression coverage: tracked-file paths from
+      -- `git diff` are root-relative regardless of cwd, but before the fix
+      -- `M.list_untracked` had no `-C root` and returned cwd-relative paths
+      -- (and only covered the subtree under cwd) when invoked from a
+      -- subdirectory. Once merged, the untracked entry's filepath must match
+      -- the same root-relative convention as the tracked entries, and the
+      -- listing must still cover the whole repo, not just the subdirectory.
+      it('reports untracked entries root-relative and repo-wide when cwd is a subdirectory', function()
+        write_file('tracked.txt', 'v1\n')
+        sh({ 'git', 'add', 'tracked.txt' })
+        sh({ 'git', 'commit', '-q', '-m', 'init' })
+        write_file('tracked.txt', 'v1\nv2\n')
+        vim.fn.mkdir(tmp_dir .. '/sub', 'p')
+        write_file('sub/nested.txt', 'brand new\n')
+
+        vim.fn.chdir(tmp_dir .. '/sub')
+        local err, files = run_diff('')
+        assert.is_nil(err)
+
+        local tracked_mod = find(files, 'tracked.txt')
+        assert.is_not_nil(tracked_mod)
+        assert.are.equal('M', tracked_mod.status)
+
+        local nested = find(files, 'sub/nested.txt')
+        assert.is_not_nil(nested)
+        assert.are.equal('A', nested.status)
       end)
     end)
   end)

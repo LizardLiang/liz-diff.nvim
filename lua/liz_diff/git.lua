@@ -5,6 +5,20 @@ function M.is_git_repo()
   return vim.v.shell_error == 0
 end
 
+-- Resolves the repository root for Neovim's current process cwd (list-form
+-- vim.fn.system, same locale-independent exit-code convention as
+-- M.is_git_repo / M.is_new_file — never parses git's translatable text).
+-- Returns the trimmed absolute path, or nil when the cwd isn't inside a work
+-- tree. Callers scope every subsequent git call and file `:edit` to this root
+-- so selections are correct regardless of cwd drift after the initial fetch.
+function M.repo_root()
+  local out = vim.fn.system({ 'git', 'rev-parse', '--show-toplevel' })
+  if vim.v.shell_error ~= 0 then
+    return nil
+  end
+  return vim.trim(out)
+end
+
 function M.parse_name_status(lines)
   local results = {}
   for _, line in ipairs(lines) do
@@ -157,9 +171,15 @@ local function split_nul_lines(lines)
 end
 
 -- Async job listing untracked (never-added) files, respecting .gitignore.
--- callback(err, paths). Returns the job id for M.diff's cancellation list.
-function M.list_untracked(callback)
-  return run_git({ 'git', 'ls-files', '--others', '--exclude-standard', '-z' }, function(err, lines)
+-- Scoped to `root` via `-C` (not Neovim's process cwd) so every path comes
+-- back root-relative, matching `git diff --name-status`/`--numstat`'s
+-- inherent root-relative convention. Without this, `git ls-files` (which is
+-- cwd-relative by default, unlike `git diff`) would emit cwd-relative paths
+-- when Neovim is launched inside a repo subdirectory, and would also only
+-- cover that subtree instead of the whole repo. callback(err, paths).
+-- Returns the job id for M.diff's cancellation list.
+function M.list_untracked(root, callback)
+  return run_git({ 'git', '-C', root, 'ls-files', '--others', '--exclude-standard', '-z' }, function(err, lines)
     if err then
       callback(err, nil)
       return
@@ -185,18 +205,24 @@ local function count_lines(content)
   return n
 end
 
--- Builds diff-list entries for untracked `paths` via pure Lua file reads (no
--- per-file git process — identical behavior on Windows). Binary is detected
--- by a NUL byte in the first 8KB; otherwise lines are counted for
--- `insertions` (deletions always 0, since there's nothing to compare
--- against). A path that can no longer be opened yields a zero-count entry
--- rather than erroring the whole list.
-function M.untracked_stats(paths)
+-- Builds diff-list entries for untracked `paths` (root-relative, as returned
+-- by M.list_untracked) via pure Lua file reads (no per-file git process —
+-- identical behavior on Windows). Each path is joined onto `root` before
+-- `io.open` since Lua's io library resolves relative paths against
+-- Neovim's process cwd, not the repo root the paths are relative to — with
+-- nvim's cwd in a subdirectory, opening the bare relative path would miss
+-- the file. Binary is detected by a NUL byte in the first 8KB; otherwise
+-- lines are counted for `insertions` (deletions always 0, since there's
+-- nothing to compare against). A path that can no longer be opened yields a
+-- zero-count entry rather than erroring the whole list. Entries keep the
+-- root-relative `path` (not the absolute one) so they match the tracked
+-- entries' filepath convention.
+function M.untracked_stats(root, paths)
   local entries = {}
   for _, path in ipairs(paths) do
     local binary = false
     local insertions = 0
-    local f = io.open(path, 'rb')
+    local f = io.open(root .. '/' .. path, 'rb')
     if f then
       -- Check only the first 8KB for a NUL byte before deciding whether to
       -- read the rest — avoids pulling large binary files fully into memory
@@ -243,7 +269,12 @@ function M.append_untracked(files, untracked_entries)
   return results
 end
 
-function M.diff(reference, callback)
+-- `root` scopes the untracked-file listing/read (M.list_untracked /
+-- M.untracked_stats) to the repo root resolved at fetch time — see those
+-- functions' docs. The `git diff --name-status`/`--numstat` commands below
+-- are left unscoped: git diff's paths are always root-relative regardless of
+-- the invoking process's cwd, so no `-C root` is needed there.
+function M.diff(reference, root, callback)
   local cmd1 = { 'git', 'diff', '--name-status' }
   local cmd2 = { 'git', 'diff', '--numstat' }
 
@@ -285,7 +316,7 @@ function M.diff(reference, callback)
     local stat = M.parse_numstat(numstat_lines)
     local files = M.merge_results(ns, stat)
     if include_untracked then
-      files = M.append_untracked(files, M.untracked_stats(untracked_paths or {}))
+      files = M.append_untracked(files, M.untracked_stats(root, untracked_paths or {}))
     end
     callback(nil, files)
   end
@@ -311,7 +342,7 @@ function M.diff(reference, callback)
   end)
 
   if include_untracked then
-    jobs[#jobs + 1] = M.list_untracked(function(err, paths)
+    jobs[#jobs + 1] = M.list_untracked(root, function(err, paths)
       if err then
         fail(err)
         return

@@ -65,6 +65,26 @@ describe('liz-diff.cache', function()
       assert.are.equal('M', cache.get('main').files[1].status)
       assert.are.equal('A', cache.get('dev').files[1].status)
     end)
+
+    it('stores the root recorded at fetch time alongside files and meta', function()
+      local files = { { status = 'M', filepath = 'a.lua', insertions = 1, deletions = 1, binary = false } }
+      cache.set('main', files, { n = 1 }, '/repo/root')
+      local entry = cache.get('main')
+      assert.are.equal('/repo/root', entry.root)
+    end)
+
+    it('defaults root to nil when not provided', function()
+      cache.set('main', {
+        { status = 'M', filepath = 'a.lua', insertions = 1, deletions = 1, binary = false },
+      })
+      assert.is_nil(cache.get('main').root)
+    end)
+
+    it('overwrites root on a later set() for the same keyword', function()
+      cache.set('main', {}, nil, '/old/root')
+      cache.set('main', {}, nil, '/new/root')
+      assert.are.equal('/new/root', cache.get('main').root)
+    end)
   end)
 
   describe('set_cursor()', function()

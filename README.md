@@ -25,8 +25,8 @@
 
 - **Centered floating window** with an input prompt and a navigable changed-files list
 - **Any git reference** — branch, commit hash, tag, range (`main..HEAD`), or empty for all uncommitted changes (staged + unstaged + untracked)
-- **Pull / merge request review** — prefix the prompt with `#` or `!` (e.g. `#123`) to browse a GitHub PR or GitLab MR's `base...head` diff, read-only base-left / head-right (needs the `gh` / `glab` CLI; core stays zero-dependency)
-- **Side-by-side vimdiff** per file status: added files show an empty left pane, deleted files show an empty right pane, renamed files are treated as modified, and — in the `:LizDiff` list flow — binary files notify instead of crashing
+- **Pull / merge request review** — prefix the prompt with `#` or `!` (e.g. `#123`) to browse a GitHub PR or GitLab MR's `base...head` diff, read-only head-left / base-right (needs the `gh` / `glab` CLI; core stays zero-dependency)
+- **Side-by-side vimdiff** per file status: added files show the working file on the left and an empty, `(new file)`-marked reference pane on the right, deleted files show a `[deleted]` placeholder on the left and the reference content on the right, renamed files are treated as modified, and — in the `:LizDiff` list flow — binary files notify instead of crashing
 - **In-memory cache per keyword** — reopening the panel restores the last reference's results instantly
 - **Explicit refresh** — `<CR>` always re-fetches on submit, and `R` refreshes the results list in place without leaving the float
 - **Cursor position remembered** per keyword across re-opens
@@ -89,10 +89,11 @@ Skips the floating window entirely: diffs the file in the **current buffer**
 against a git reference (default `HEAD`) with zero prompts. Also available as
 `require('liz_diff').open_current(ref)`.
 
-**Side order is the deliberate opposite of `:LizDiff`**: the working (current
-buffer, including unsaved edits) file is on the **LEFT**, the reference/commit
-version is on the **RIGHT**, and focus returns to the left window. `:LizDiff`'s
-list flow is unchanged (commit left / working right).
+**Side order**: the working (current buffer, including unsaved edits) file is
+on the **LEFT**, the reference/commit version is on the **RIGHT**, and focus
+returns to the left window. This is the one shared layout rule across every
+liz-diff view — the `:LizDiff` list flow matches it too (working/new side
+LEFT, reference RIGHT).
 
 ```
 :LizDiffFile          " current file vs HEAD
@@ -113,6 +114,13 @@ right pane opens empty instead of erroring, and its buffer name carries a
 rather than a real empty file. An unresolvable reference also produces an
 empty right pane, but without the marker or any error.
 
+The `:LizDiff` list flow follows the same rule and goes one step further: it
+always attempts to read the reference version regardless of the file's listed
+status (a stale/cached status is never trusted to skip the read). If that read
+fails for a reason other than "the file doesn't exist at the reference", a
+`WARN`-level notification names the file so a blank reference pane is never
+silent or unexplained.
+
 ### Reviewing a pull / merge request
 
 Inside the `:LizDiff` prompt, prefix the keyword with **`#`** (or **`!`**) followed
@@ -125,7 +133,8 @@ by a number to target a pull request / merge request instead of a raw git ref:
 
 The plugin lists the PR's changed files (its `base...head` diff) in the usual
 float; pressing `<CR>` on a file opens a **read-only** side-by-side diff with the
-PR **base on the LEFT** and **head on the RIGHT**. Both panes come straight from
+PR **head on the LEFT** and **base on the RIGHT** — matching the working-left /
+reference-right rule used everywhere else. Both panes come straight from
 git — a PR head is a branch you're reviewing, not your working tree, so nothing on
 disk is edited.
 
@@ -167,7 +176,7 @@ require('liz_diff').setup({
 1. `:LizDiff` opens a centered float with an input prompt.
 2. Typing a reference and pressing `<CR>` runs `git diff --numstat <ref>` asynchronously — every submit fetches fresh, even for a previously-seen reference.
 3. Results render as `<status> <path> +<insertions> -<deletions>`.
-4. Pressing `<CR>` on a file closes the float and opens a vertical vimdiff split (reference version vs working tree).
+4. Pressing `<CR>` on a file closes the float and opens a vertical vimdiff split (working tree on the left, reference version on the right).
 5. Pressing `R` with the results list focused re-runs `git diff` for the currently displayed reference in place, preserving the cursor position (clamped to the new list length).
 6. Each successful fetch is cached in memory so closing and reopening the panel restores the last reference's results and cursor position without a git call.
 

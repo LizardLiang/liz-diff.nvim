@@ -6,8 +6,8 @@ function M.get(keyword)
   return cache[keyword]
 end
 
-function M.set(keyword, files, meta)
-  cache[keyword] = { files = files, cursor_index = 1, meta = meta }
+function M.set(keyword, files, meta, root)
+  cache[keyword] = { files = files, cursor_index = 1, meta = meta, root = root }
 end
 
 function M.set_cursor(keyword, index)

@@ -28,10 +28,12 @@ Features ~
       changed-files list.
     - Any git reference: branch, commit hash, tag, range (`main..HEAD`),
       or empty for unstaged working-tree changes.
-    - Side-by-side vimdiff per file status: added files show an empty
-      left pane, deleted files show an empty right pane, renamed files
-      are treated as modified, and — in the |:LizDiff| list flow —
-      binary files notify instead of crashing.
+    - Side-by-side vimdiff per file status: added files show the working
+      file on the left and an empty, `(new file)`-marked reference pane
+      on the right, deleted files show a `[deleted]` placeholder on the
+      left and the reference content on the right, renamed files are
+      treated as modified, and — in the |:LizDiff| list flow — binary
+      files notify instead of crashing.
     - In-memory cache per keyword: reopening the panel restores the last
       reference's results instantly.
     - Explicit refresh: <CR> always re-fetches on submit, and `R`
@@ -77,8 +79,16 @@ Using packer.nvim: >lua
     reference, even if it was already fetched this session, keeping
     unstaged working-tree diffs current. Pressing <CR> on a file in the
     results list closes the float and opens a vertical vimdiff split
-    with the reference version on the left and the working tree on the
-    right.
+    with the working tree on the left and the reference version on the
+    right — the file open and every git call for the selection are
+    scoped to the repository root resolved when the list was fetched,
+    independent of Neovim's cwd at selection time.
+
+    The reference pane is always read via `git show`, regardless of the
+    file's listed status (a stale/cached status is never trusted to skip
+    the read). If that read fails for a reason other than the file being
+    absent from the reference tree, a WARN-level notification names the
+    file — a blank reference pane is never silent or unexplained.
 
     If Neovim's current working directory is not inside a git work tree,
     |:LizDiff| warns "liz-diff: not a git repository" and does nothing.
@@ -95,7 +105,8 @@ PR / MR review ~
 <
     The plugin lists the PR's changed files (its `base...head` diff) in the
     usual float. Pressing <CR> on a file opens a READ-ONLY side-by-side
-    diff with the PR base on the LEFT and head on the RIGHT — both panes
+    diff with the PR head on the LEFT and base on the RIGHT — matching the
+    working-left / reference-right rule used everywhere else. Both panes
     come from git, so nothing on disk is edited (a PR head is a branch you
     are reviewing, not your working tree).
 
@@ -122,11 +133,11 @@ PR / MR review ~
     skipped entirely. Also available as
     `require('liz_diff').open_current({ref})`.
 
-    Side order is the deliberate opposite of |:LizDiff|'s list flow: the
-    working buffer (current buffer, including unsaved edits) is placed
-    on the LEFT, and the reference/commit version is placed on the
-    RIGHT, with focus returned to the left window. |:LizDiff| itself is
-    unchanged (commit left / working right). >
+    Side order: the working buffer (current buffer, including unsaved
+    edits) is placed on the LEFT, and the reference/commit version is
+    placed on the RIGHT, with focus returned to the left window. This is
+    the one shared layout rule across every liz-diff view — |:LizDiff|'s
+    list flow matches it too (working/new side LEFT, reference RIGHT). >
 
     :LizDiffFile          " current file vs HEAD
     :LizDiffFile main     " current file vs the main branch

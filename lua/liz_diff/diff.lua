@@ -84,7 +84,32 @@ local function open_ref_pane(direction, content, name, filetype)
   return fill_scratch(content, name, filetype)
 end
 
-function M.open(reference, file)
+-- Resolves the reference-pane content for a M.open() selection. Always
+-- attempts `git -C root show ref_rev..source_path` regardless of the file's
+-- listed status (that status may be stale — e.g. restored from cache). On
+-- success returns the content. On failure, distinguishes a genuinely new file
+-- (absent from ref_label's tree, via git.is_new_file's locale-independent
+-- exit-code check) from an unexpected failure: the latter carries a non-nil
+-- `warning` message (naming the file, including git's trimmed output) so the
+-- caller can notify instead of silently blanking the pane. Kept separate from
+-- window/buffer setup so this contract is unit-testable with a mocked
+-- vim.fn.system, without standing up real Neovim splits.
+function M.resolve_ref_content(root, ref_rev, ref_label, source_path)
+  local out = vim.fn.system({ 'git', '-C', root, 'show', ref_rev .. source_path })
+  if vim.v.shell_error == 0 then
+    return out, false, nil
+  end
+
+  local is_new = git.is_new_file(root, ref_label, source_path)
+  if is_new then
+    return '', true, nil
+  end
+
+  local warning = 'liz-diff: could not read ' .. source_path .. ' at ' .. ref_label .. ': ' .. vim.trim(out)
+  return '', false, warning
+end
+
+function M.open(reference, file, root)
   if file.binary then
     vim.notify('liz-diff: binary file, cannot diff', vim.log.levels.INFO)
     return
@@ -99,12 +124,10 @@ function M.open(reference, file)
     source_path = file.filepath
   end
 
-  local ref_content = ''
-  if file.status ~= 'A' then
-    local result = vim.fn.system({ 'git', 'show', M.ref_rev(reference) .. source_path })
-    if vim.v.shell_error == 0 then
-      ref_content = result
-    end
+  local ref_label = M.ref_label(reference)
+  local ref_content, is_new_file, warning = M.resolve_ref_content(root, M.ref_rev(reference), ref_label, source_path)
+  if warning then
+    vim.notify(warning, vim.log.levels.WARN)
   end
 
   if file.status == 'D' then
@@ -114,26 +137,27 @@ function M.open(reference, file)
     vim.api.nvim_set_option_value('bufhidden', 'wipe', { buf = del_buf })
     vim.api.nvim_buf_set_name(del_buf, '[deleted] ' .. file.filepath)
   else
-    vim.cmd('edit ' .. vim.fn.fnameescape(file.filepath))
+    vim.cmd('edit ' .. vim.fn.fnameescape(root .. '/' .. file.filepath))
   end
 
   vim.cmd('diffthis')
-  local right_win = vim.api.nvim_get_current_win()
+  local left_win = vim.api.nvim_get_current_win()
 
-  local ref_label = M.ref_label(reference)
   local ft = vim.filetype.match({ filename = file.filepath }) or ''
 
-  -- Force the new window to the LEFT regardless of the user's 'splitright'.
-  open_ref_pane('leftabove', ref_content, M.ref_buffer_name(ref_label, file.filepath, file.status == 'A'), ft)
+  -- Force the new window to the RIGHT regardless of the user's 'splitright'.
+  open_ref_pane('rightbelow', ref_content, M.ref_buffer_name(ref_label, file.filepath, is_new_file), ft)
 
-  vim.api.nvim_set_current_win(right_win)
+  vim.api.nvim_set_current_win(left_win)
 end
 
 -- M.open_current(reference): diffs the CURRENT buffer's file against `reference`.
--- Intentionally the OPPOSITE side order of M.open above: the live working
--- buffer stays on the LEFT, the reference/commit content goes on the RIGHT.
--- Do not "fix" this to match M.open — it is the deliberate, user-requested
--- layout for the zero-prompt current-file command.
+-- The live working buffer stays on the LEFT, the reference/commit content goes
+-- on the RIGHT — this is the ONE shared layout rule across every liz-diff
+-- view (M.open's list flow and M.open_pr's head/base flow both match it).
+-- This function remains otherwise the reference implementation: git calls and
+-- the repo-root lookup below stay scoped to the buffer's own directory via
+-- `-C dir`, independent of Neovim's process cwd.
 function M.open_current(reference)
   local buf = 0
   local abs = vim.api.nvim_buf_get_name(buf)
@@ -187,11 +211,12 @@ function M.open_current(reference)
   vim.api.nvim_set_current_win(left_win)
 end
 
--- M.open_pr(pr, file): diffs a PR/MR file with BOTH sides read-only from git —
--- base (merge-base) on the LEFT, head on the RIGHT. Unlike M.open, neither pane
+-- M.open_pr(pr, file, root): diffs a PR/MR file with BOTH sides read-only from
+-- git — head (newer) on the LEFT, base (merge-base) on the RIGHT, matching the
+-- one layout rule shared by every liz-diff view. Unlike M.open, neither pane
 -- is the live working file: a PR head is a branch under review, not your tree.
 -- `pr` carries { base_oid, head_oid, merge_base, n } as produced by pr.lua.
-function M.open_pr(pr, file)
+function M.open_pr(pr, file, root)
   if file.binary then
     vim.notify('liz-diff: binary file, cannot diff', vim.log.levels.INFO)
     return
@@ -203,11 +228,11 @@ function M.open_pr(pr, file)
   local base_path = (file.status == 'R' and file.old_path) or file.filepath
   local base_rev = pr.merge_base or pr.base_oid
 
-  -- LEFT (base) is empty for an added file; RIGHT (head) is empty for a deleted
+  -- RIGHT (base) is empty for an added file; LEFT (head) is empty for a deleted
   -- file. A failed `git show` (e.g. side absent) yields a blank pane, not an error.
   local base_content = ''
   if file.status ~= 'A' then
-    local out = vim.fn.system({ 'git', 'show', base_rev .. ':' .. base_path })
+    local out = vim.fn.system({ 'git', '-C', root, 'show', base_rev .. ':' .. base_path })
     if vim.v.shell_error == 0 then
       base_content = out
     end
@@ -215,7 +240,7 @@ function M.open_pr(pr, file)
 
   local head_content = ''
   if file.status ~= 'D' then
-    local out = vim.fn.system({ 'git', 'show', pr.head_oid .. ':' .. head_path })
+    local out = vim.fn.system({ 'git', '-C', root, 'show', pr.head_oid .. ':' .. head_path })
     if vim.v.shell_error == 0 then
       head_content = out
     end
@@ -224,14 +249,13 @@ function M.open_pr(pr, file)
   local ft = vim.filetype.match({ filename = file.filepath }) or ''
   local label = 'PR#' .. tostring(pr.n)
 
-  -- RIGHT pane = head, in the current window.
-  fill_scratch(head_content, M.ref_buffer_name(label .. ' head', head_path), ft)
-  local right_win = vim.api.nvim_get_current_win()
+  -- RIGHT pane = base, in the current window.
+  fill_scratch(base_content, M.ref_buffer_name(label .. ' base', base_path), ft)
 
-  -- Force the base pane to the LEFT regardless of the user's 'splitright'.
-  open_ref_pane('leftabove', base_content, M.ref_buffer_name(label .. ' base', base_path), ft)
-
-  vim.api.nvim_set_current_win(right_win)
+  -- Force the head pane to the LEFT regardless of the user's 'splitright'.
+  -- open_ref_pane leaves the new (head) window focused, which is the desired
+  -- final focus for the PR flow — no explicit restore needed.
+  open_ref_pane('leftabove', head_content, M.ref_buffer_name(label .. ' head', head_path), ft)
 end
 
 return M

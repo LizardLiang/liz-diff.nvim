@@ -43,9 +43,59 @@ describe('liz-diff.diff', function()
     end)
   end)
 
-  pending('open() with Modified file opens vimdiff with ref left, working right')
-  pending('open() with Added file opens vimdiff with empty left pane')
-  pending('open() with Deleted file opens vimdiff with empty right pane')
+  -- resolve_ref_content() backs M.open()'s "always attempt git show, never a
+  -- silent unexplained blank pane" contract (tactical plan step 3 / spec-delta
+  -- "Reference Pane Fallback In List Flow"). Mocked vim.fn.system + a
+  -- monkey-patched git.is_new_file keep this a pure-logic unit test, no real
+  -- Neovim splits required.
+  describe('resolve_ref_content()', function()
+    local git
+    local orig_is_new_file
+
+    before_each(function()
+      git = require('liz_diff.git')
+      orig_is_new_file = git.is_new_file
+    end)
+
+    after_each(function()
+      git.is_new_file = orig_is_new_file
+    end)
+
+    it('returns the content on a successful git show', function()
+      vim.fn.system = function() return 'file contents\n' end
+      vim.v = { shell_error = 0 }
+      local content, is_new, warning = diff.resolve_ref_content('/repo', 'HEAD:', 'HEAD', 'a.lua')
+      assert.are.equal('file contents\n', content)
+      assert.is_false(is_new)
+      assert.is_nil(warning)
+    end)
+
+    it('returns is_new=true with no warning when the path is absent at the ref', function()
+      vim.fn.system = function() return "fatal: path 'new.lua' does not exist in 'HEAD'\n" end
+      vim.v = { shell_error = 128 }
+      git.is_new_file = function() return true end
+      local content, is_new, warning = diff.resolve_ref_content('/repo', 'HEAD:', 'HEAD', 'new.lua')
+      assert.are.equal('', content)
+      assert.is_true(is_new)
+      assert.is_nil(warning)
+    end)
+
+    it('returns a warning naming the file for an unexpected (non-new-file) failure', function()
+      vim.fn.system = function() return 'fatal: unable to read tree object\n' end
+      vim.v = { shell_error = 128 }
+      git.is_new_file = function() return false end
+      local content, is_new, warning = diff.resolve_ref_content('/repo', 'HEAD:', 'HEAD', 'broken.lua')
+      assert.are.equal('', content)
+      assert.is_false(is_new)
+      assert.is_not_nil(warning)
+      assert.is_not_nil(warning:find('broken.lua', 1, true))
+      assert.is_not_nil(warning:find('unable to read tree object', 1, true))
+    end)
+  end)
+
+  pending('open() with Modified file opens vimdiff with working left, ref right')
+  pending('open() with Added file opens vimdiff with empty (new file) ref pane on the right')
+  pending('open() with Deleted file opens vimdiff with a [deleted] placeholder on the left')
   pending('open() with Renamed file uses old_path for reference content')
   pending('open() with binary file shows notify and returns without opening diff')
   pending('open() with empty reference uses HEAD as old side, and (new file) suffix for status A')

@@ -7,11 +7,12 @@ local pr = require('liz_diff.pr')
 
 local M = {}
 
-M._VERSION = "0.5.0"
+M._VERSION = "0.6.0"
 
 local state = {
   current_keyword = nil,
   current_pr = nil,
+  current_root = nil,
   active_jobs = {},
 }
 
@@ -45,6 +46,18 @@ function M.open()
     state.active_jobs = {}
     state.current_keyword = keyword
 
+    -- Repo root resolved once per fetch (not once globally): scopes every git
+    -- call and `:edit` for selections made from this list to the root that
+    -- was current when the list was fetched, regardless of later cwd drift.
+    local root = git.repo_root()
+    state.current_root = root
+    if not root then
+      state.current_pr = nil
+      ui._set_files_ref({})
+      ui.set_error('liz-diff: could not resolve repository root')
+      return
+    end
+
     -- Captured PR meta for this fetch: nil for a raw ref, the resolved info for
     -- a PR keyword. Cached alongside the files so a reopen can diff without
     -- re-resolving.
@@ -53,7 +66,7 @@ function M.open()
     local function on_result(err, files)
       if keyword ~= state.current_keyword then
         if not err and files and #files > 0 then
-          cache.set(keyword, files, pr_info)
+          cache.set(keyword, files, pr_info, root)
         end
         return
       end
@@ -63,7 +76,7 @@ function M.open()
       elseif #files == 0 then
         ui.set_empty(keyword)
       else
-        cache.set(keyword, files, pr_info)
+        cache.set(keyword, files, pr_info, root)
         ui.set_results(format_files(files), cursor_index)
         ui._set_files_ref(files)
       end
@@ -72,7 +85,7 @@ function M.open()
     local pr_number = pr.parse_keyword(keyword)
     if not pr_number then
       state.current_pr = nil
-      state.active_jobs = git.diff(keyword, on_result)
+      state.active_jobs = git.diff(keyword, root, on_result)
       return
     end
 
@@ -105,7 +118,7 @@ function M.open()
         pr_info = info
         state.current_pr = info
         local range = info.base_oid .. '...' .. info.head_oid
-        local jobs = git.diff(range, on_result)
+        local jobs = git.diff(range, root, on_result)
         for _, j in ipairs(jobs) do
           state.active_jobs[#state.active_jobs + 1] = j
         end
@@ -129,9 +142,9 @@ function M.open()
     cache.set_cursor(state.current_keyword, ui.get_cursor_index())
     ui.close()
     if state.current_pr then
-      diff.open_pr(state.current_pr, file)
+      diff.open_pr(state.current_pr, file, state.current_root)
     else
-      diff.open(state.current_keyword, file)
+      diff.open(state.current_keyword, file, state.current_root)
     end
   end
 
@@ -146,6 +159,10 @@ function M.open()
       -- Restore PR context (nil for a raw ref) so a select from the restored
       -- list diffs base-vs-head without re-resolving.
       state.current_pr = cached.meta
+      -- Restore the root recorded when this list was fetched, so a selection
+      -- from the restored (cached) list scopes to the same repo even if
+      -- Neovim's cwd has since changed.
+      state.current_root = cached.root
     end
   end
 end
