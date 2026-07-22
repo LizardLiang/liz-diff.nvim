@@ -176,6 +176,36 @@ message rather than a crash.
 > aren't auto-detected yet. Everything else (raw `:LizDiff` refs) is unaffected
 > and still needs no external tools.
 
+### Compare two arbitrary files
+
+Stage any two files — from different directories, unrelated git histories, or
+no git repository at all — and open them side-by-side, completely independent
+of `:LizDiff` / `:LizDiffFile`'s git plumbing:
+
+| Command           | Action                                                          |
+| ----------------- | ---------------------------------------------------------------- |
+| `:LizDiffAdd`     | Stage the **current buffer's** file into the compare list (max 2) |
+| `:LizDiffCompare` | Open the two staged files side-by-side in vimdiff                |
+| `:LizDiffList`    | Show the staged files (slot + side) in a float                   |
+| `:LizDiffClear`   | Empty the compare list                                           |
+
+**First staged file is LEFT, second staged file is RIGHT** — forced regardless
+of your `'splitright'` setting, matching the plugin's one shared layout rule.
+Both panes are real, editable file buffers opened via `:edit`, so each buffer's
+name is simply the file's own path — no custom naming needed.
+
+Staging a third file while the list already holds a pair opens a float letting
+you pick which slot (`1` = LEFT, `2` = RIGHT) the new file replaces, or `q` /
+`<Esc>` to cancel and leave the pair untouched.
+
+`<Plug>(LizDiffAdd)` and `<Plug>(LizDiffCompare)` are also available if you'd
+rather bind your own keys (no default key is bound):
+
+```lua
+vim.keymap.set('n', '<leader>ca', '<Plug>(LizDiffAdd)', { desc = 'liz-diff: stage current file' })
+vim.keymap.set('n', '<leader>cc', '<Plug>(LizDiffCompare)', { desc = 'liz-diff: compare staged files' })
+```
+
 ## Configuration
 
 Call `setup()` with any overrides (all fields optional):

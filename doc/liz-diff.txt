@@ -11,6 +11,7 @@ CONTENTS                                                   *liz-diff-contents*
        PR / MR review .................... |liz-diff-pr|
        File navigation ................... |liz-diff-navigation|
        :LizDiffFile ...................... |:LizDiffFile|
+       Compare two arbitrary files ....... |liz-diff-compare|
     5. Keymaps ........................... |liz-diff-keymaps|
     6. Configuration ..................... |liz-diff-configuration|
     7. API ................................ |liz-diff-api|
@@ -195,6 +196,63 @@ File navigation ~
       scoped to the file's directory, not Neovim's process cwd, so it
       still works when Neovim was launched from outside any repo.
 
+                                                          *liz-diff-compare*
+                    *:LizDiffAdd* *:LizDiffCompare* *:LizDiffList* *:LizDiffClear*
+Compare two arbitrary files ~
+
+    Stage any two files and open them side-by-side, completely
+    git-agnostic (no `require('liz_diff.git')`, no git calls at all):
+
+    :LizDiffAdd
+        Stages the CURRENT buffer's file into a compare list holding at
+        most two files. Paths are stored absolute and normalized so a
+        file staged from a differently-separated path is recognized as
+        the same entry; on Windows, paths are also case-folded so a
+        differently-cased path to the same file (case-insensitive NTFS)
+        is recognized too, while Unix paths stay case-sensitive.
+
+        Guards (same sequence as |:LizDiffFile|'s current-buffer checks):
+        no file name, a `liz-diff://` reference buffer, or a non-empty
+        `buftype` each notify "liz-diff: no file in current buffer" (or,
+        for a `liz-diff://` buffer, a message naming that case) and leave
+        the list unchanged.
+
+        Staging the same file twice notifies that it is already staged
+        and leaves the list unchanged. Staging a third file while the
+        list already holds a pair opens a floating picker listing the
+        two staged files (with LEFT/RIGHT slot) plus the incoming file:
+        press `1` or `2` to replace that slot (notifying the result), or
+        `q` / `<Esc>` to cancel and leave the pair untouched.
+
+    :LizDiffCompare
+        Opens the two staged files as real, editable file buffers in a
+        two-pane vimdiff: the FIRST-staged file on the LEFT, the
+        SECOND-staged file on the RIGHT, forced regardless of
+        `'splitright'` — the same shared layout rule as |:LizDiffFile|.
+        Each buffer's name is simply its own file path. Any prior
+        liz-diff reference panes are torn down first, matching
+        |:LizDiffFile|.
+
+        Fewer than two files staged: notifies "liz-diff: need two files
+        to compare, N staged" and does nothing. A staged file that no
+        longer exists on disk: warns naming the missing file and aborts
+        before either pane opens.
+
+    :LizDiffList
+        Opens a floating window listing the currently staged files with
+        their slot and LEFT/RIGHT assignment, or an empty-state message
+        when nothing is staged. Closes on `q` / `<Esc>`.
+
+    :LizDiffClear
+        Empties the compare list and notifies confirmation.
+
+    `<Plug>(LizDiffAdd)` and `<Plug>(LizDiffCompare)` are non-recursive
+    mappings for the same actions, for users who prefer to bind their
+    own keys — no default key is bound: >lua
+
+    vim.keymap.set('n', '<leader>ca', '<Plug>(LizDiffAdd)')
+    vim.keymap.set('n', '<leader>cc', '<Plug>(LizDiffCompare)')
+<
 ==============================================================================
 5. Keymaps                                                  *liz-diff-keymaps*
 
@@ -286,6 +344,22 @@ require('liz_diff').prev()
     Opens the next / previous file in the active |:LizDiff| list, wrapping
     at the ends. Equivalent to |:LizDiffNext| / |:LizDiffPrev|. No-op with
     a notification when no list is active. See |liz-diff-navigation|.
+
+require('liz_diff').add()
+    Stages the current buffer's file into the compare list. Equivalent to
+    |:LizDiffAdd|. See |liz-diff-compare|.
+
+require('liz_diff').compare()
+    Opens the two staged compare-list files side-by-side. Equivalent to
+    |:LizDiffCompare|. See |liz-diff-compare|.
+
+require('liz_diff').list()
+    Shows the staged compare-list files in a float. Equivalent to
+    |:LizDiffList|. See |liz-diff-compare|.
+
+require('liz_diff').clear()
+    Empties the compare list. Equivalent to |:LizDiffClear|. See
+    |liz-diff-compare|.
 
 ==============================================================================
 vim:tw=78:ts=8:noet:ft=help:norl:

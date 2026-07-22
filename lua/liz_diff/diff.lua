@@ -200,6 +200,34 @@ function M.open(reference, file, root)
   vim.api.nvim_set_current_win(left_win)
 end
 
+-- Resolves the CURRENT buffer's file path for a same-buffer action (diffing
+-- it, staging it into the compare list). Shared by M.open_current here and
+-- liz_diff.compare's M.add, so the "is this a real file buffer" guard has one
+-- implementation instead of two independently-drifting copies. Rejects (INFO
+-- notify, returns nil) an empty name, a `liz-diff://` reference buffer (using
+-- the caller-supplied `ref_buffer_message` so each call site keeps its own
+-- wording), or a non-empty `buftype`; returns the absolute path on success.
+function M.current_buffer_path(ref_buffer_message)
+  local buf = 0
+  local abs = vim.api.nvim_buf_get_name(buf)
+  if abs == '' then
+    vim.notify('liz-diff: no file in current buffer', vim.log.levels.INFO)
+    return nil
+  end
+
+  if abs:match('^liz%-diff://') then
+    vim.notify(ref_buffer_message, vim.log.levels.INFO)
+    return nil
+  end
+
+  if vim.bo[buf].buftype ~= '' then
+    vim.notify('liz-diff: no file in current buffer', vim.log.levels.INFO)
+    return nil
+  end
+
+  return abs
+end
+
 -- M.open_current(reference): diffs the CURRENT buffer's file against `reference`.
 -- The live working buffer stays on the LEFT, the reference/commit content goes
 -- on the RIGHT — this is the ONE shared layout rule across every liz-diff
@@ -208,20 +236,8 @@ end
 -- the repo-root lookup below stay scoped to the buffer's own directory via
 -- `-C dir`, independent of Neovim's process cwd.
 function M.open_current(reference)
-  local buf = 0
-  local abs = vim.api.nvim_buf_get_name(buf)
-  if abs == '' then
-    vim.notify('liz-diff: no file in current buffer', vim.log.levels.INFO)
-    return
-  end
-
-  if abs:match('^liz%-diff://') then
-    vim.notify('liz-diff: cannot diff a liz-diff reference buffer', vim.log.levels.INFO)
-    return
-  end
-
-  if vim.bo[buf].buftype ~= '' then
-    vim.notify('liz-diff: no file in current buffer', vim.log.levels.INFO)
+  local abs = M.current_buffer_path('liz-diff: cannot diff a liz-diff reference buffer')
+  if not abs then
     return
   end
 

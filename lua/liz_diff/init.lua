@@ -7,7 +7,7 @@ local pr = require('liz_diff.pr')
 
 local M = {}
 
-M._VERSION = "0.7.0"
+M._VERSION = "0.8.0"
 
 local state = {
   current_keyword = nil,
@@ -228,6 +228,25 @@ function M.open_current(ref)
   -- file when nvim was launched from outside any repo. diff.open_current
   -- owns the repo check instead, scoped to the buffer's own directory.
   diff.open_current(ref or 'HEAD')
+end
+
+-- Thin delegators to liz_diff.compare (the git-agnostic "stage two files,
+-- diff them" flow) — mirrors M.next/M.prev/M.open_current above. No compare
+-- state lives in init.lua; liz_diff.compare owns the two-slot list.
+function M.add()
+  require('liz_diff.compare').add()
+end
+
+function M.compare()
+  require('liz_diff.compare').compare()
+end
+
+function M.list()
+  require('liz_diff.compare').show_list()
+end
+
+function M.clear()
+  require('liz_diff.compare').clear()
 end
 
 return M
