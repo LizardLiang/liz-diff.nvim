@@ -28,6 +28,7 @@
 - **Pull / merge request review** — prefix the prompt with `#` or `!` (e.g. `#123`) to browse a GitHub PR or GitLab MR's `base...head` diff, read-only head-left / base-right (needs the `gh` / `glab` CLI; core stays zero-dependency)
 - **Side-by-side vimdiff** per file status: added files show the working file on the left and an empty, `(new file)`-marked reference pane on the right, deleted files show a `[deleted]` placeholder on the left and the reference content on the right, renamed files are treated as modified, and — in the `:LizDiff` list flow — binary files notify instead of crashing
 - **Next / previous file navigation** — after opening a file from the list, jump straight to the next or previous changed file with `]f` / `[f` (or `:LizDiffNext` / `:LizDiffPrev`) without reopening the picker; wraps around at both ends
+- **Compare two arbitrary files** — stage any two files with `:LizDiffAdd`, then `:LizDiffCompare` opens them side-by-side (first-staged left, second right) as real editable buffers; fully git-independent, with `:LizDiffList` / `:LizDiffClear` to manage the pair
 - **In-memory cache per keyword** — reopening the panel restores the last reference's results instantly
 - **Explicit refresh** — `<CR>` always re-fetches on submit, and `R` refreshes the results list in place without leaving the float
 - **Cursor position remembered** per keyword across re-opens
