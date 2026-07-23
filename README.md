@@ -29,6 +29,7 @@
 - **Side-by-side vimdiff** per file status: added files show the working file on the left and an empty, `(new file)`-marked reference pane on the right, deleted files show a `[deleted]` placeholder on the left and the reference content on the right, renamed files are treated as modified, and — in the `:LizDiff` list flow — binary files notify instead of crashing
 - **Next / previous file navigation** — after opening a file from the list, jump straight to the next or previous changed file with `]f` / `[f` (or `:LizDiffNext` / `:LizDiffPrev`) without reopening the picker; wraps around at both ends
 - **Compare two arbitrary files** — stage any two files with `:LizDiffAdd`, then `:LizDiffCompare` opens them side-by-side (first-staged left, second right) as real editable buffers; fully git-independent, with `:LizDiffList` / `:LizDiffClear` to manage the pair
+- **Show both diff panes' paths** — `:LizDiffPaths` blinks each pane's absolute path above it for ~2s (on-disk files show the full path, reference panes show `<ref>:<path>`), useful when the pane titles alone aren't enough
 - **In-memory cache per keyword** — reopening the panel restores the last reference's results instantly
 - **Explicit refresh** — `<CR>` always re-fetches on submit, and `R` refreshes the results list in place without leaving the float
 - **Cursor position remembered** per keyword across re-opens
@@ -206,6 +207,24 @@ rather bind your own keys (no default key is bound):
 vim.keymap.set('n', '<leader>ca', '<Plug>(LizDiffAdd)', { desc = 'liz-diff: stage current file' })
 vim.keymap.set('n', '<leader>cc', '<Plug>(LizDiffCompare)', { desc = 'liz-diff: compare staged files' })
 ```
+
+### `:LizDiffPaths` — show both diff panes' paths
+
+```
+:LizDiffPaths
+```
+
+Blinks the path of **both** panes of the currently active diff as virtual
+text pinned above each pane for about 2 seconds, then auto-clears. Nothing is
+ever written into real buffer content.
+
+- An on-disk pane (a real file buffer) shows its full absolute path.
+- A `liz-diff://` reference/scratch pane (commit, PR blob, or deleted-file
+  placeholder) shows `<ref>:<repo-absolute path>`, e.g. `HEAD:/repo/a.lua`.
+- Running it again re-renders and restarts the 2s timer; opening a new diff
+  clears any lingering overlay from the previous one.
+- With no diff window open in the current tab, it notifies
+  `liz-diff: no active diff` and does nothing else.
 
 ## Configuration
 

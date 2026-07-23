@@ -7,6 +7,10 @@ vim.api.nvim_create_user_command('LizDiffFile', function(o)
   require('liz_diff').open_current(ref)
 end, { nargs = '?', desc = 'liz-diff: diff current file vs HEAD (working left, commit right)' })
 
+vim.api.nvim_create_user_command('LizDiffPaths', function()
+  require('liz_diff').paths()
+end, { desc = "liz-diff: blink both diff panes' absolute paths for ~2s" })
+
 vim.api.nvim_create_user_command('LizDiffNext', function()
   require('liz_diff').next()
 end, { desc = 'liz-diff: diff the next file in the list' })

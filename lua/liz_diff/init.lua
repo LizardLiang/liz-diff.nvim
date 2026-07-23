@@ -7,7 +7,7 @@ local pr = require('liz_diff.pr')
 
 local M = {}
 
-M._VERSION = "0.8.0"
+M._VERSION = "0.9.0"
 
 local state = {
   current_keyword = nil,
@@ -228,6 +228,12 @@ function M.open_current(ref)
   -- file when nvim was launched from outside any repo. diff.open_current
   -- owns the repo check instead, scoped to the buffer's own directory.
   diff.open_current(ref or 'HEAD')
+end
+
+-- Blinks the path of every pane in the active diff for ~2s. Equivalent to
+-- :LizDiffPaths.
+function M.paths()
+  diff.show_paths()
 end
 
 -- Thin delegators to liz_diff.compare (the git-agnostic "stage two files,

@@ -2,6 +2,18 @@ local git = require('liz_diff.git')
 
 local M = {}
 
+-- Namespace + duration for the :LizDiffPaths blink overlay (extmark
+-- virt_lines pinned above each diff pane, cleared after PATHS_BLINK_MS).
+local PATHS_NS = vim.api.nvim_create_namespace('liz_diff_paths')
+local PATHS_BLINK_MS = 2000
+
+-- Bumped on every M.show_paths() call; the deferred auto-clear captures its
+-- own generation and no-ops if a later invocation has superseded it. Without
+-- this guard, two show_paths() calls within PATHS_BLINK_MS race: the first
+-- call's stale deferred clear fires and wipes the second call's fresh
+-- overlay early instead of letting it run its own full PATHS_BLINK_MS (PO-5).
+local paths_generation = 0
+
 local ref_buffers = {}
 
 -- Buffers carrying the buffer-local ]f / [f nav keymaps. Tracked separately
@@ -22,6 +34,9 @@ local function nav_keys()
   return keys
 end
 
+-- Also clears the :LizDiffPaths blink overlay (PATHS_NS) from every
+-- nav-mapped buffer — notably the non-wiped LEFT working buffer — so no
+-- stale path overlay survives into the next diff session (PO-7).
 local function clear_nav_keymaps()
   local keys = nav_keys()
   for _, buf in ipairs(nav_mapped_buffers) do
@@ -29,6 +44,7 @@ local function clear_nav_keymaps()
       for _, k in ipairs(keys) do
         pcall(vim.keymap.del, 'n', k.key, { buffer = buf })
       end
+      vim.api.nvim_buf_clear_namespace(buf, PATHS_NS, 0, -1)
     end
   end
   nav_mapped_buffers = {}
@@ -97,7 +113,10 @@ end
 -- `content` (trailing newline trimmed), named `name`, filetype `filetype`,
 -- marked buftype=nofile/bufhidden=wipe/noswapfile/nomodifiable, marked for
 -- diffthis, and tracked in ref_buffers for the next cleanup_previous().
-local function fill_scratch(content, name, filetype)
+-- `display_path`, when given, is stashed as vim.b[buf].liz_diff_path — the
+-- <ref>:<repo-absolute path> string M.pane_path()/:LizDiffPaths reads for
+-- this virtual pane, computed here while root/relpath/ref are in scope.
+local function fill_scratch(content, name, filetype, display_path)
   vim.cmd('enew')
   local ref_buf = vim.api.nvim_get_current_buf()
 
@@ -115,6 +134,10 @@ local function fill_scratch(content, name, filetype)
   vim.api.nvim_buf_set_name(ref_buf, name)
   vim.api.nvim_set_option_value('filetype', filetype, { buf = ref_buf })
 
+  if display_path then
+    vim.b[ref_buf].liz_diff_path = display_path
+  end
+
   vim.cmd('diffthis')
   ref_buffers[#ref_buffers + 1] = ref_buf
 
@@ -125,9 +148,9 @@ end
 -- overriding the user's 'splitright' setting, then fills the new window with a
 -- read-only reference scratch buffer via fill_scratch. The new window is left
 -- focused; callers restore focus afterward.
-local function open_ref_pane(direction, content, name, filetype)
+local function open_ref_pane(direction, content, name, filetype, display_path)
   vim.cmd(direction .. ' vsplit')
-  return fill_scratch(content, name, filetype)
+  return fill_scratch(content, name, filetype, display_path)
 end
 
 -- Resolves the reference-pane content for a M.open() selection. Always
@@ -182,6 +205,7 @@ function M.open(reference, file, root)
     vim.api.nvim_set_option_value('buftype', 'nofile', { buf = del_buf })
     vim.api.nvim_set_option_value('bufhidden', 'wipe', { buf = del_buf })
     vim.api.nvim_buf_set_name(del_buf, '[deleted] ' .. file.filepath)
+    vim.b[del_buf].liz_diff_path = root .. '/' .. file.filepath
   else
     vim.cmd('edit ' .. vim.fn.fnameescape(root .. '/' .. file.filepath))
   end
@@ -193,7 +217,9 @@ function M.open(reference, file, root)
   local ft = vim.filetype.match({ filename = file.filepath }) or ''
 
   -- Force the new window to the RIGHT regardless of the user's 'splitright'.
-  local right_buf = open_ref_pane('rightbelow', ref_content, M.ref_buffer_name(ref_label, file.filepath, is_new_file), ft)
+  local right_display = ref_label .. ':' .. root .. '/' .. source_path
+  local right_buf =
+    open_ref_pane('rightbelow', ref_content, M.ref_buffer_name(ref_label, file.filepath, is_new_file), ft, right_display)
 
   set_nav_keymaps({ left_buf, right_buf })
 
@@ -271,7 +297,8 @@ function M.open_current(reference)
   local ft = vim.filetype.match({ filename = relpath }) or ''
 
   -- Force the new window to the RIGHT regardless of the user's 'splitright'.
-  open_ref_pane('rightbelow', ref_content, M.ref_buffer_name(reference, relpath, is_new_file), ft)
+  local right_display = reference .. ':' .. abs
+  open_ref_pane('rightbelow', ref_content, M.ref_buffer_name(reference, relpath, is_new_file), ft, right_display)
 
   vim.api.nvim_set_current_win(left_win)
 end
@@ -315,14 +342,83 @@ function M.open_pr(pr, file, root)
   local label = 'PR#' .. tostring(pr.n)
 
   -- RIGHT pane = base, in the current window.
-  local base_buf = fill_scratch(base_content, M.ref_buffer_name(label .. ' base', base_path), ft)
+  local base_display = base_rev .. ':' .. root .. '/' .. base_path
+  local base_buf = fill_scratch(base_content, M.ref_buffer_name(label .. ' base', base_path), ft, base_display)
 
   -- Force the head pane to the LEFT regardless of the user's 'splitright'.
   -- open_ref_pane leaves the new (head) window focused, which is the desired
   -- final focus for the PR flow — no explicit restore needed.
-  local head_buf = open_ref_pane('leftabove', head_content, M.ref_buffer_name(label .. ' head', head_path), ft)
+  local head_display = pr.head_oid .. ':' .. root .. '/' .. head_path
+  local head_buf = open_ref_pane('leftabove', head_content, M.ref_buffer_name(label .. ' head', head_path), ft, head_display)
 
   set_nav_keymaps({ base_buf, head_buf })
+end
+
+-- Resolves the display path for a single diff pane buffer: a stashed
+-- vim.b[buf].liz_diff_path (virtual/reference/deleted panes) wins; otherwise
+-- a real on-disk buffer (buftype == '', non-empty name) shows its full
+-- absolute path; otherwise the raw buffer name is returned as a defensive
+-- fallback. Pure aside from the buffer reads, so the on-disk-vs-virtual rule
+-- is unit-testable without standing up real diff windows (mirrors the
+-- ref_buffer_name / resolve_ref_content pattern).
+function M.pane_path(buf)
+  local stashed = vim.b[buf].liz_diff_path
+  if stashed then
+    return stashed
+  end
+
+  local name = vim.api.nvim_buf_get_name(buf)
+  if name ~= '' and vim.bo[buf].buftype == '' then
+    return vim.fn.fnamemodify(name, ':p')
+  end
+
+  return name
+end
+
+-- :LizDiffPaths — blinks every diff pane's path (see M.pane_path) as an
+-- extmark virt_lines line above the pane, for PATHS_BLINK_MS. Idempotent:
+-- clears PATHS_NS on the target buffers first so a repeat invocation doesn't
+-- stack overlays, then re-renders and re-schedules the auto-clear. A fresh
+-- invocation supersedes any prior invocation's pending auto-clear (via
+-- paths_generation) so the newest overlay always gets its own full
+-- PATHS_BLINK_MS lifetime instead of being cut short by a stale timer
+-- (PO-5). INFO no-op when no window in the current tabpage has 'diff' set.
+function M.show_paths()
+  local bufs = {}
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if vim.api.nvim_win_is_valid(win) and vim.api.nvim_get_option_value('diff', { win = win }) then
+      local buf = vim.api.nvim_win_get_buf(win)
+      bufs[#bufs + 1] = buf
+    end
+  end
+
+  if #bufs == 0 then
+    vim.notify('liz-diff: no active diff', vim.log.levels.INFO)
+    return
+  end
+
+  paths_generation = paths_generation + 1
+  local generation = paths_generation
+
+  for _, buf in ipairs(bufs) do
+    vim.api.nvim_buf_clear_namespace(buf, PATHS_NS, 0, -1)
+    vim.api.nvim_buf_set_extmark(buf, PATHS_NS, 0, 0, {
+      virt_lines = { { { M.pane_path(buf), 'Comment' } } },
+      virt_lines_above = true,
+    })
+  end
+
+  vim.defer_fn(function()
+    if generation ~= paths_generation then
+      -- Superseded by a later show_paths() call; that call owns the clear.
+      return
+    end
+    for _, buf in ipairs(bufs) do
+      if vim.api.nvim_buf_is_valid(buf) then
+        vim.api.nvim_buf_clear_namespace(buf, PATHS_NS, 0, -1)
+      end
+    end
+  end, PATHS_BLINK_MS)
 end
 
 return M

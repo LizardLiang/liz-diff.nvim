@@ -12,6 +12,7 @@ CONTENTS                                                   *liz-diff-contents*
        File navigation ................... |liz-diff-navigation|
        :LizDiffFile ...................... |:LizDiffFile|
        Compare two arbitrary files ....... |liz-diff-compare|
+       :LizDiffPaths ...................... |:LizDiffPaths|
     5. Keymaps ........................... |liz-diff-keymaps|
     6. Configuration ..................... |liz-diff-configuration|
     7. API ................................ |liz-diff-api|
@@ -45,6 +46,8 @@ Features ~
     - Explicit refresh: <CR> always re-fetches on submit, and `R`
       refreshes the results list in place without leaving the float.
     - Cursor position remembered per keyword across re-opens.
+    - Show both diff panes' paths: |:LizDiffPaths| blinks each pane's
+      absolute (or `<ref>:<path>`) path above it for ~2s.
     - Zero dependencies beyond Neovim 0.9+ and git.
 
 ==============================================================================
@@ -253,6 +256,29 @@ Compare two arbitrary files ~
     vim.keymap.set('n', '<leader>ca', '<Plug>(LizDiffAdd)')
     vim.keymap.set('n', '<leader>cc', '<Plug>(LizDiffCompare)')
 <
+                                                              *:LizDiffPaths*
+:LizDiffPaths
+
+    Blinks the path of BOTH panes of the currently active diff as virtual
+    text (extmark virt_lines, highlighted as |hl-Comment|) pinned above
+    each pane, for about 2 seconds, then auto-clears. Real buffer content
+    is never modified.
+
+    - An on-disk pane (a real file buffer) shows its full absolute path
+      (`fnamemodify(name, ':p')`).
+    - A `liz-diff://` reference/scratch pane (a commit, PR blob, or the
+      `[deleted] <path>` placeholder) shows `{ref}:{repo-absolute path}`,
+      e.g. `HEAD:/repo/a.lua` — computed and stashed on the pane's buffer
+      when it was created, so the command needs no extra git call and
+      makes no assumption about Neovim's current working directory.
+    - Running |:LizDiffPaths| again re-renders and restarts the 2-second
+      timer. Opening a new diff (via any liz-diff command) clears any
+      overlay left over from a previous |:LizDiffPaths| call.
+    - With no diff window open in the current tabpage, it notifies
+      "liz-diff: no active diff" and makes no other change.
+
+    Also available as `require('liz_diff').paths()`.
+<
 ==============================================================================
 5. Keymaps                                                  *liz-diff-keymaps*
 
@@ -360,6 +386,10 @@ require('liz_diff').list()
 require('liz_diff').clear()
     Empties the compare list. Equivalent to |:LizDiffClear|. See
     |liz-diff-compare|.
+
+require('liz_diff').paths()
+    Blinks the path of both panes of the active diff for ~2s. Equivalent
+    to |:LizDiffPaths|.
 
 ==============================================================================
 vim:tw=78:ts=8:noet:ft=help:norl:
