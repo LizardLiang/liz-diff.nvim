@@ -84,6 +84,49 @@ describe('liz-diff.init', function()
     end)
   end)
 
+  -- M.resolve_open_mode() is the routing rule behind the `:LizDiff` range-open
+  -- fix: it decides, per file open, whether to dispatch through diff.open_pr,
+  -- diff.open_commits (the new two-commit pane shared with the PR flow), or
+  -- the original diff.open (working-tree LEFT / reference RIGHT — valid for a
+  -- single ref only). 'range-unresolved' is the case that used to silently
+  -- fall through to diff.open and hit the `<range>:<path>` git show bug this
+  -- fix removes; open_file_at (untestable here — needs a live nav session)
+  -- turns it into a notify-only no-op instead.
+  describe('resolve_open_mode()', function()
+    local liz_diff
+
+    before_each(function()
+      liz_diff = require('tests.helpers').reset_module('liz_diff')
+    end)
+
+    it('routes to "pr" when a PR/MR session is active, regardless of keyword shape', function()
+      assert.are.equal('pr', liz_diff.resolve_open_mode({ n = 12 }, nil, '#12'))
+    end)
+
+    it('routes to "range" when a range has already been resolved', function()
+      local range = { base_rev = 'a', head_rev = 'b', label = 'a..b' }
+      assert.are.equal('range', liz_diff.resolve_open_mode(nil, range, 'a..b'))
+    end)
+
+    it('routes to "range-unresolved" for a range keyword with no resolved range', function()
+      assert.are.equal('range-unresolved', liz_diff.resolve_open_mode(nil, nil, 'a...b'))
+      assert.are.equal('range-unresolved', liz_diff.resolve_open_mode(nil, nil, 'main..HEAD'))
+    end)
+
+    it('routes to "ref" for a plain single-ref keyword', function()
+      assert.are.equal('ref', liz_diff.resolve_open_mode(nil, nil, 'main'))
+    end)
+
+    it('routes to "ref" for the empty-prompt keyword', function()
+      assert.are.equal('ref', liz_diff.resolve_open_mode(nil, nil, ''))
+    end)
+
+    it('prefers "pr" over a stale current_range from a previous session', function()
+      local range = { base_rev = 'a', head_rev = 'b' }
+      assert.are.equal('pr', liz_diff.resolve_open_mode({ n = 1 }, range, '#1'))
+    end)
+  end)
+
   -- Integration tests for open() flow
   pending('open() aborts with notify when not in git repo')
   pending('open() closes existing float before opening (toggle)')

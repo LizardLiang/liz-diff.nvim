@@ -269,6 +269,66 @@ function M.append_untracked(files, untracked_entries)
   return results
 end
 
+-- Splits a `:LizDiff` keyword into its two endpoints when it names a commit
+-- range, mirroring git's own `a..b` / `a...b` grammar (gitrevisions(7)):
+-- two dots is a plain two-revision diff, three dots is the symmetric-
+-- difference diff whose left side is merge-base(a, b). Either side may be
+-- empty (`a..`, `..b`, `..`) meaning HEAD, exactly as git itself treats a
+-- missing endpoint — both empty sides are already resolved to 'HEAD' in the
+-- returned table so callers never have to special-case them again. The
+-- three-dot pattern is tried FIRST: trying two-dot first on an `a...b`
+-- keyword would match the first two of the three dots and leave a stray
+-- leading dot on `right` (`.b` instead of `b`). Returns
+-- { dots = '...'|'..', left = string, right = string } for a genuine range,
+-- or nil for a single ref / the empty prompt (git forbids ".." inside a
+-- valid ref name, so any keyword containing it is a range or already
+-- invalid — never a ref liz-diff needs to treat as a plain reference).
+function M.parse_range(keyword)
+  if type(keyword) ~= 'string' or keyword == '' then
+    return nil
+  end
+
+  local dots = '...'
+  local left, right = keyword:match('^(.-)%.%.%.(.-)$')
+  if not left then
+    dots = '..'
+    left, right = keyword:match('^(.-)%.%.(.-)$')
+  end
+  if not left then
+    return nil
+  end
+
+  return {
+    dots = dots,
+    left = left ~= '' and left or 'HEAD',
+    right = right ~= '' and right or 'HEAD',
+  }
+end
+
+-- Resolves a parsed range (M.parse_range) to the two revisions M.open_commits
+-- reads with `git show <rev>:<path>`. For `a..b` this is trivial (base =
+-- left, head = right — no git call needed). For `a...b` the base is
+-- merge-base(left, right), matching `git diff a...b`'s own file list (the
+-- three-dot diff is always against the merge-base, not `left` itself) so the
+-- two-pane content agrees with the file list the user picked the file from.
+-- Scoped to `root` via `-C` like every other git call here. Returns
+-- { base_rev, head_rev } on success, or (nil, err) — a clear, file-naming
+-- error string, never a crash — when the merge-base itself can't be resolved
+-- (e.g. one side isn't a valid revision, or the two histories are unrelated).
+function M.resolve_range(range, root)
+  if range.dots == '..' then
+    return { base_rev = range.left, head_rev = range.right }, nil
+  end
+
+  local out = vim.fn.system({ 'git', '-C', root, 'merge-base', range.left, range.right })
+  if vim.v.shell_error ~= 0 then
+    return nil,
+      'liz-diff: could not resolve merge-base of ' .. range.left .. ' and ' .. range.right .. ': ' .. vim.trim(out)
+  end
+
+  return { base_rev = vim.trim(out), head_rev = range.right }, nil
+end
+
 -- `root` scopes the untracked-file listing/read (M.list_untracked /
 -- M.untracked_stats) to the repo root resolved at fetch time — see those
 -- functions' docs. The `git diff --name-status`/`--numstat` commands below

@@ -24,7 +24,7 @@
 ## Features
 
 - **Centered floating window** with an input prompt and a navigable changed-files list
-- **Any git reference** — branch, commit hash, tag, range (`main..HEAD`), or empty for all uncommitted changes (staged + unstaged + untracked)
+- **Any git reference** — branch, commit hash, tag, range (`main..HEAD` or `main...HEAD`, opened read-only head-left / base-right — see [Comparing a commit range](#comparing-a-commit-range)), or empty for all uncommitted changes (staged + unstaged + untracked)
 - **Pull / merge request review** — prefix the prompt with `#` or `!` (e.g. `#123`) to browse a GitHub PR or GitLab MR's `base...head` diff, read-only head-left / base-right (needs the `gh` / `glab` CLI; core stays zero-dependency)
 - **Side-by-side vimdiff** per file status: added files show the working file on the left and an empty, `(new file)`-marked reference pane on the right, deleted files show a `[deleted]` placeholder on the left and the reference content on the right, renamed files are treated as modified, and — in the `:LizDiff` list flow — binary files notify instead of crashing
 - **Next / previous file navigation** — after opening a file from the list, jump straight to the next or previous changed file with `]f` / `[f` (or `:LizDiffNext` / `:LizDiffPrev`) without reopening the picker; wraps around at both ends
@@ -145,6 +145,34 @@ fails for a reason other than "the file doesn't exist at the reference", a
 `WARN`-level notification names the file so a blank reference pane is never
 silent or unexplained.
 
+### Comparing a commit range
+
+Typing a range in the `:LizDiff` prompt — anything containing `..` — lists the
+files that range changes, exactly like `git diff` itself:
+
+```
+main..HEAD     " two-dot: a plain diff between the two revisions
+main...HEAD    " three-dot: diff against the merge-base of the two revisions
+```
+
+Pressing `<CR>` on a file opens a **read-only** side-by-side diff — the same
+layout as the PR/MR flow below — with the range's **head on the LEFT** and
+**base on the RIGHT**:
+
+- `a...b`: base is `git merge-base a b`, head is `b` — this matches the file
+  list `git diff a...b` itself produced.
+- `a..b`: base is `a`, head is `b`, exactly as typed.
+- An empty side (`main..`, `..main`, or bare `..`) means `HEAD`, just as it
+  does for git itself.
+
+Both panes come straight from git — a commit range compares two commits, not
+your working tree, so nothing on disk is read or edited, and (like the PR/MR
+flow) untracked files are excluded from the list. Base/head are resolved once
+when the range is submitted, not once per file, so `]f` / `[f` reuse the same
+pair when cycling through the list. If the range can't be resolved (e.g. an
+unrelated-history pair with no merge-base), you get a `WARN` notification
+naming the problem instead of a crash or a broken diff.
+
 ### Reviewing a pull / merge request
 
 Inside the `:LizDiff` prompt, prefix the keyword with **`#`** (or **`!`**) followed
@@ -250,7 +278,7 @@ require('liz_diff').setup({
 1. `:LizDiff` opens a centered float with an input prompt.
 2. Typing a reference and pressing `<CR>` runs `git diff --numstat <ref>` asynchronously — every submit fetches fresh, even for a previously-seen reference.
 3. Results render as `<status> <path> +<insertions> -<deletions>`.
-4. Pressing `<CR>` on a file closes the float and opens a vertical vimdiff split (working tree on the left, reference version on the right). The file list stays active, so `]f` / `[f` (or `:LizDiffNext` / `:LizDiffPrev`) cycle to sibling files without reopening the picker.
+4. Pressing `<CR>` on a file closes the float and opens a vertical vimdiff split. For a single ref, that's the working tree on the left and the reference version on the right; for a commit range (`a..b` / `a...b`) or a PR/MR keyword, both sides are read-only commit content instead — head on the left, base on the right — since a range or a PR compares two commits, not your working tree. The file list stays active, so `]f` / `[f` (or `:LizDiffNext` / `:LizDiffPrev`) cycle to sibling files without reopening the picker.
 5. Pressing `R` with the results list focused re-runs `git diff` for the currently displayed reference in place, preserving the cursor position (clamped to the new list length).
 6. Each successful fetch is cached in memory so closing and reopening the panel restores the last reference's results and cursor position without a git call.
 

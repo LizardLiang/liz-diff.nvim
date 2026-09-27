@@ -8,6 +8,7 @@ CONTENTS                                                   *liz-diff-contents*
     3. Installation ...................... |liz-diff-installation|
     4. Usage ............................. |liz-diff-usage|
        :LizDiff .......................... |:LizDiff|
+       Commit range comparison ........... |liz-diff-range|
        PR / MR review .................... |liz-diff-pr|
        File navigation ................... |liz-diff-navigation|
        :LizDiffFile ...................... |:LizDiffFile|
@@ -29,8 +30,9 @@ No external diff tool, no heavy UI, no plugin dependencies.
 Features ~
     - Centered floating window with an input prompt and a navigable
       changed-files list.
-    - Any git reference: branch, commit hash, tag, range (`main..HEAD`),
-      or empty for unstaged working-tree changes.
+    - Any git reference: branch, commit hash, tag, range (`main..HEAD` or
+      `main...HEAD`, opened read-only head-left / base-right, see
+      |liz-diff-range|), or empty for unstaged working-tree changes.
     - Side-by-side vimdiff per file status: added files show the working
       file on the left and an empty, `(new file)`-marked reference pane
       on the right, deleted files show a `[deleted]` placeholder on the
@@ -91,7 +93,9 @@ Using packer.nvim: >lua
     with the working tree on the left and the reference version on the
     right — the file open and every git call for the selection are
     scoped to the repository root resolved when the list was fetched,
-    independent of Neovim's cwd at selection time.
+    independent of Neovim's cwd at selection time. This working-tree
+    layout applies to a SINGLE reference only; a commit range keyword
+    opens both sides read-only instead, see |liz-diff-range|.
 
     The reference pane is always read via `git show`, regardless of the
     file's listed status (a stale/cached status is never trusted to skip
@@ -101,6 +105,36 @@ Using packer.nvim: >lua
 
     If Neovim's current working directory is not inside a git work tree,
     |:LizDiff| warns "liz-diff: not a git repository" and does nothing.
+
+                                                               *liz-diff-range*
+Commit range comparison ~
+
+    Typing a range in the |:LizDiff| prompt — anything containing `..` —
+    lists the files that range changes, exactly like `git diff` itself: >
+
+    main..HEAD     " two-dot: a plain diff between the two revisions
+    main...HEAD    " three-dot: diff against the merge-base of the two
+<
+    Pressing <CR> on a file opens a READ-ONLY side-by-side diff — the
+    same layout as |liz-diff-pr| below — with the range's HEAD on the
+    LEFT and BASE on the RIGHT:
+
+    - `a...b`: base is `git merge-base a b`, head is `b` — matching the
+      file list `git diff a...b` itself produced.
+    - `a..b`: base is `a`, head is `b`, exactly as typed.
+    - An empty side (`main..`, `..main`, or bare `..`) means `HEAD`,
+      exactly as it does for git itself.
+
+    Both panes come straight from git — a commit range compares two
+    commits, not your working tree, so nothing on disk is read or
+    edited, and (like |liz-diff-pr|) untracked files are excluded from
+    the list. Base/head are resolved ONCE when the range is submitted,
+    not once per file, so |liz-diff-navigation|'s `]f` / `[f` reuse the
+    same pair when cycling through the list.
+
+    If the range cannot be resolved (e.g. an unrelated-history pair with
+    no merge-base), a WARN-level notification names the problem instead
+    of a crash or a broken diff.
 
                                                                   *liz-diff-pr*
 PR / MR review ~

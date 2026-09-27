@@ -254,6 +254,129 @@ describe('liz-diff.diff', function()
     end)
   end)
 
+  -- M.open_commits() backs the `:LizDiff` range-open fix: both a commit-range
+  -- keyword (`a..b` / `a...b`, via git.resolve_range) and the PR/MR flow
+  -- (M.open_pr) now share this one function instead of two independently-
+  -- drifting copies. The core regression this guards is Hermes-visible from
+  -- the outside too: `git show <rev>:<path>` must always use ONE resolved
+  -- revision per side, never the raw range/label string with a colon glued
+  -- on (that was M.open's `M.ref_rev(reference) == reference .. ':'` bug,
+  -- which produced the "object ... is a blob, not a commit" / "Invalid
+  -- symmetric difference expression" errors this fix exists for).
+  describe('open_commits() — generalized two-commit pane (range/PR reuse)', function()
+    local calls
+
+    before_each(function()
+      calls = {}
+      vim.fn.system = function(args)
+        calls[#calls + 1] = args
+        return 'content\n'
+      end
+      vim.v = { shell_error = 0 }
+    end)
+
+    after_each(function()
+      diff.cleanup_previous()
+    end)
+
+    it('reads base/head via <rev>:<path>, never the range/label string with a colon', function()
+      local spec = { label = 'a...b', base_rev = 'basecommit', head_rev = 'headcommit' }
+      local file = { status = 'M', filepath = 'x.lua' }
+
+      diff.open_commits(spec, file, '/repo')
+
+      assert.are.equal(2, #calls)
+      assert.are.same({ 'git', '-C', '/repo', 'show', 'basecommit:x.lua' }, calls[1])
+      assert.are.same({ 'git', '-C', '/repo', 'show', 'headcommit:x.lua' }, calls[2])
+
+      for _, args in ipairs(calls) do
+        local joined = table.concat(args, ' ')
+        assert.is_nil(joined:find('a...b:', 1, true))
+      end
+    end)
+
+    it('labels both panes with the actual refs (e.g. "a...b head"/"base"), not PR#nil', function()
+      local spec = { label = 'a...b', base_rev = 'basecommit', head_rev = 'headcommit' }
+      local file = { status = 'M', filepath = 'x.lua' }
+
+      diff.open_commits(spec, file, '/repo')
+
+      local has_base, has_head = false, false
+      for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+        local name = vim.api.nvim_buf_get_name(buf)
+        if name:find('liz-diff://a...b base/x.lua', 1, true) then
+          has_base = true
+        end
+        if name:find('liz-diff://a...b head/x.lua', 1, true) then
+          has_head = true
+        end
+        assert.is_nil(name:find('PR#nil', 1, true))
+      end
+      assert.is_true(has_base)
+      assert.is_true(has_head)
+    end)
+
+    it('leaves the base (RIGHT) pane empty for an added file, without a git show for it', function()
+      local spec = { label = 'a..b', base_rev = 'a', head_rev = 'b' }
+      local file = { status = 'A', filepath = 'new.lua' }
+
+      diff.open_commits(spec, file, '/repo')
+
+      assert.are.equal(1, #calls)
+      assert.are.same({ 'git', '-C', '/repo', 'show', 'b:new.lua' }, calls[1])
+    end)
+
+    it('leaves the head (LEFT) pane empty for a deleted file, without a git show for it', function()
+      local spec = { label = 'a..b', base_rev = 'a', head_rev = 'b' }
+      local file = { status = 'D', filepath = 'gone.lua' }
+
+      diff.open_commits(spec, file, '/repo')
+
+      assert.are.equal(1, #calls)
+      assert.are.same({ 'git', '-C', '/repo', 'show', 'a:gone.lua' }, calls[1])
+    end)
+
+    it('reads the base pane from old_path for a renamed file', function()
+      local spec = { label = 'a..b', base_rev = 'a', head_rev = 'b' }
+      local file = { status = 'R', filepath = 'new_name.lua', old_path = 'old_name.lua' }
+
+      diff.open_commits(spec, file, '/repo')
+
+      assert.are.same({ 'git', '-C', '/repo', 'show', 'a:old_name.lua' }, calls[1])
+      assert.are.same({ 'git', '-C', '/repo', 'show', 'b:new_name.lua' }, calls[2])
+    end)
+
+    it('notifies and does not open for a binary file', function()
+      local notified
+      local orig_notify = vim.notify
+      vim.notify = function(msg) notified = msg end
+
+      diff.open_commits({ label = 'a..b', base_rev = 'a', head_rev = 'b' }, { status = 'M', filepath = 'x.bin', binary = true }, '/repo')
+
+      assert.are.equal(0, #calls)
+      assert.are.equal('liz-diff: binary file, cannot diff', notified)
+      vim.notify = orig_notify
+    end)
+
+    it('M.open_pr delegates to open_commits with label "PR#<n>" and base = merge_base or base_oid', function()
+      local pr = { n = 12, base_oid = 'baseoid', head_oid = 'headoid', merge_base = 'mergebase' }
+      local file = { status = 'M', filepath = 'x.lua' }
+
+      diff.open_pr(pr, file, '/repo')
+
+      assert.are.same({ 'git', '-C', '/repo', 'show', 'mergebase:x.lua' }, calls[1])
+      assert.are.same({ 'git', '-C', '/repo', 'show', 'headoid:x.lua' }, calls[2])
+
+      local has_base = false
+      for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+        if vim.api.nvim_buf_get_name(buf):find('liz-diff://PR#12 base/x.lua', 1, true) then
+          has_base = true
+        end
+      end
+      assert.is_true(has_base)
+    end)
+  end)
+
   pending('open() with Modified file opens vimdiff with working left, ref right')
   pending('open() with Added file opens vimdiff with empty (new file) ref pane on the right')
   pending('open() with Deleted file opens vimdiff with a [deleted] placeholder on the left')
