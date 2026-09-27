@@ -303,12 +303,18 @@ function M.open_current(reference)
   vim.api.nvim_set_current_win(left_win)
 end
 
--- M.open_pr(pr, file, root): diffs a PR/MR file with BOTH sides read-only from
--- git — head (newer) on the LEFT, base (merge-base) on the RIGHT, matching the
--- one layout rule shared by every liz-diff view. Unlike M.open, neither pane
--- is the live working file: a PR head is a branch under review, not your tree.
--- `pr` carries { base_oid, head_oid, merge_base, n } as produced by pr.lua.
-function M.open_pr(pr, file, root)
+-- M.open_commits(spec, file, root): diffs `file` with BOTH sides read-only
+-- from git — head on the LEFT, base on the RIGHT, matching the one layout
+-- rule shared by every liz-diff view. Neither pane is the live working file:
+-- `spec` names two commits, not your working tree. `spec` carries
+-- { label, base_rev, head_rev } — label is the string shown in each pane's
+-- buffer name (e.g. 'PR#12' or the literal 'a...b' keyword the user typed),
+-- and base_rev/head_rev are any revision `git show <rev>:<path>` accepts.
+-- Shared by M.open_pr (PR/MR review) and M.open's range dispatch in
+-- init.lua (a `a..b` / `a...b` keyword, via git.resolve_range) so the two
+-- "compare two commits" flows don't carry independently-drifting copies of
+-- this logic.
+function M.open_commits(spec, file, root)
   if file.binary then
     vim.notify('liz-diff: binary file, cannot diff', vim.log.levels.INFO)
     return
@@ -318,13 +324,12 @@ function M.open_pr(pr, file, root)
 
   local head_path = file.filepath
   local base_path = (file.status == 'R' and file.old_path) or file.filepath
-  local base_rev = pr.merge_base or pr.base_oid
 
   -- RIGHT (base) is empty for an added file; LEFT (head) is empty for a deleted
   -- file. A failed `git show` (e.g. side absent) yields a blank pane, not an error.
   local base_content = ''
   if file.status ~= 'A' then
-    local out = vim.fn.system({ 'git', '-C', root, 'show', base_rev .. ':' .. base_path })
+    local out = vim.fn.system({ 'git', '-C', root, 'show', spec.base_rev .. ':' .. base_path })
     if vim.v.shell_error == 0 then
       base_content = out
     end
@@ -332,26 +337,40 @@ function M.open_pr(pr, file, root)
 
   local head_content = ''
   if file.status ~= 'D' then
-    local out = vim.fn.system({ 'git', '-C', root, 'show', pr.head_oid .. ':' .. head_path })
+    local out = vim.fn.system({ 'git', '-C', root, 'show', spec.head_rev .. ':' .. head_path })
     if vim.v.shell_error == 0 then
       head_content = out
     end
   end
 
   local ft = vim.filetype.match({ filename = file.filepath }) or ''
-  local label = 'PR#' .. tostring(pr.n)
 
   -- RIGHT pane = base, in the current window.
-  local base_display = base_rev .. ':' .. root .. '/' .. base_path
-  local base_buf = fill_scratch(base_content, M.ref_buffer_name(label .. ' base', base_path), ft, base_display)
+  local base_display = spec.base_rev .. ':' .. root .. '/' .. base_path
+  local base_buf = fill_scratch(base_content, M.ref_buffer_name(spec.label .. ' base', base_path), ft, base_display)
 
   -- Force the head pane to the LEFT regardless of the user's 'splitright'.
   -- open_ref_pane leaves the new (head) window focused, which is the desired
-  -- final focus for the PR flow — no explicit restore needed.
-  local head_display = pr.head_oid .. ':' .. root .. '/' .. head_path
-  local head_buf = open_ref_pane('leftabove', head_content, M.ref_buffer_name(label .. ' head', head_path), ft, head_display)
+  -- final focus for this flow — no explicit restore needed.
+  local head_display = spec.head_rev .. ':' .. root .. '/' .. head_path
+  local head_buf =
+    open_ref_pane('leftabove', head_content, M.ref_buffer_name(spec.label .. ' head', head_path), ft, head_display)
 
   set_nav_keymaps({ base_buf, head_buf })
+end
+
+-- M.open_pr(pr, file, root): diffs a PR/MR file with BOTH sides read-only from
+-- git — head (newer) on the LEFT, base (merge-base) on the RIGHT. Unlike
+-- M.open, neither pane is the live working file: a PR head is a branch under
+-- review, not your tree. `pr` carries { base_oid, head_oid, merge_base, n }
+-- as produced by pr.lua. Thin wrapper over M.open_commits — see that
+-- function for the shared two-commit pane logic.
+function M.open_pr(pr, file, root)
+  M.open_commits({
+    label = 'PR#' .. tostring(pr.n),
+    base_rev = pr.merge_base or pr.base_oid,
+    head_rev = pr.head_oid,
+  }, file, root)
 end
 
 -- Resolves the display path for a single diff pane buffer: a stashed

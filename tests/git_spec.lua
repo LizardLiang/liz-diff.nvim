@@ -303,6 +303,148 @@ describe('liz-diff.git', function()
     end)
   end)
 
+  -- M.parse_range() backs the `:LizDiff` range-open fix (a commit-range
+  -- keyword must never reach M.open's `git show <range>:<path>` — see
+  -- diff_spec.lua's open_commits() tests for the other half of that
+  -- contract). Pure string parsing, no git call.
+  describe('parse_range()', function()
+    it('returns nil for the empty prompt', function()
+      assert.is_nil(git.parse_range(''))
+    end)
+
+    it('returns nil for a single ref with no dots', function()
+      assert.is_nil(git.parse_range('main'))
+    end)
+
+    it('returns nil for a ref with a single dot (e.g. a semver tag)', function()
+      assert.is_nil(git.parse_range('v1.2.3'))
+    end)
+
+    it('returns nil for non-string input', function()
+      assert.is_nil(git.parse_range(nil))
+    end)
+
+    it('parses a two-dot range', function()
+      local r = git.parse_range('main..HEAD')
+      assert.are.equal('..', r.dots)
+      assert.are.equal('main', r.left)
+      assert.are.equal('HEAD', r.right)
+    end)
+
+    it('parses a three-dot range', function()
+      local r = git.parse_range('main...HEAD')
+      assert.are.equal('...', r.dots)
+      assert.are.equal('main', r.left)
+      assert.are.equal('HEAD', r.right)
+    end)
+
+    it('does not mis-split a three-dot range as two-dot (no stray leading dot on right)', function()
+      local r = git.parse_range('a...b')
+      assert.are.equal('...', r.dots)
+      assert.are.equal('a', r.left)
+      assert.are.equal('b', r.right)
+    end)
+
+    it('defaults an empty left side to HEAD for two-dot', function()
+      local r = git.parse_range('..b')
+      assert.are.equal('..', r.dots)
+      assert.are.equal('HEAD', r.left)
+      assert.are.equal('b', r.right)
+    end)
+
+    it('defaults an empty right side to HEAD for two-dot', function()
+      local r = git.parse_range('a..')
+      assert.are.equal('HEAD', r.right)
+      assert.are.equal('a', r.left)
+    end)
+
+    it('defaults both sides to HEAD for a bare two-dot range', function()
+      local r = git.parse_range('..')
+      assert.are.equal('..', r.dots)
+      assert.are.equal('HEAD', r.left)
+      assert.are.equal('HEAD', r.right)
+    end)
+
+    it('defaults an empty left side to HEAD for three-dot', function()
+      local r = git.parse_range('...b')
+      assert.are.equal('...', r.dots)
+      assert.are.equal('HEAD', r.left)
+      assert.are.equal('b', r.right)
+    end)
+
+    it('defaults an empty right side to HEAD for three-dot', function()
+      local r = git.parse_range('a...')
+      assert.are.equal('...', r.dots)
+      assert.are.equal('a', r.left)
+      assert.are.equal('HEAD', r.right)
+    end)
+
+    -- Hermes SUGGESTION 3: endpoints that themselves contain a single dot (a
+    -- semver-ish tag) or braces/tildes (relative refs) must not confuse the
+    -- three-dot-checked-first split.
+    it('parses a two-dot range between two dotted tags', function()
+      local r = git.parse_range('v1.2..v1.3')
+      assert.are.equal('..', r.dots)
+      assert.are.equal('v1.2', r.left)
+      assert.are.equal('v1.3', r.right)
+    end)
+
+    it('parses a two-dot range with a relative (tilde) endpoint', function()
+      local r = git.parse_range('HEAD~1..HEAD')
+      assert.are.equal('..', r.dots)
+      assert.are.equal('HEAD~1', r.left)
+      assert.are.equal('HEAD', r.right)
+    end)
+
+    it('parses a three-dot range with an upstream (@{u}) endpoint', function()
+      local r = git.parse_range('@{u}...HEAD')
+      assert.are.equal('...', r.dots)
+      assert.are.equal('@{u}', r.left)
+      assert.are.equal('HEAD', r.right)
+    end)
+  end)
+
+  -- M.resolve_range() turns a parsed range into the { base_rev, head_rev }
+  -- pair M.open_commits() reads with `git show <rev>:<path>`.
+  describe('resolve_range()', function()
+    it('two-dot: base/head are the literal endpoints, no git call issued', function()
+      local called = false
+      vim.fn.system = function()
+        called = true
+        return ''
+      end
+      local resolved, err = git.resolve_range({ dots = '..', left = 'a', right = 'b' }, '/repo')
+      assert.is_false(called)
+      assert.is_nil(err)
+      assert.are.equal('a', resolved.base_rev)
+      assert.are.equal('b', resolved.head_rev)
+    end)
+
+    it('three-dot: base is the merge-base of left/right, head is right', function()
+      local seen_args
+      vim.fn.system = function(args)
+        seen_args = args
+        return 'deadbeef\n'
+      end
+      vim.v = { shell_error = 0 }
+      local resolved, err = git.resolve_range({ dots = '...', left = 'a', right = 'b' }, '/repo')
+      assert.is_nil(err)
+      assert.are.same({ 'git', '-C', '/repo', 'merge-base', 'a', 'b' }, seen_args)
+      assert.are.equal('deadbeef', resolved.base_rev)
+      assert.are.equal('b', resolved.head_rev)
+    end)
+
+    it('three-dot: a merge-base failure returns nil plus a message naming both sides', function()
+      vim.fn.system = function() return 'fatal: no merge base\n' end
+      vim.v = { shell_error = 1 }
+      local resolved, err = git.resolve_range({ dots = '...', left = 'a', right = 'b' }, '/repo')
+      assert.is_nil(resolved)
+      assert.is_not_nil(err)
+      assert.is_not_nil(err:find('a', 1, true))
+      assert.is_not_nil(err:find('b', 1, true))
+    end)
+  end)
+
   describe('append_untracked()', function()
     it('appends untracked entries after tracked results', function()
       local files = { { status = 'M', filepath = 'a.lua' } }
