@@ -378,6 +378,30 @@ describe('liz-diff.git', function()
       assert.are.equal('a', r.left)
       assert.are.equal('HEAD', r.right)
     end)
+
+    -- Hermes SUGGESTION 3: endpoints that themselves contain a single dot (a
+    -- semver-ish tag) or braces/tildes (relative refs) must not confuse the
+    -- three-dot-checked-first split.
+    it('parses a two-dot range between two dotted tags', function()
+      local r = git.parse_range('v1.2..v1.3')
+      assert.are.equal('..', r.dots)
+      assert.are.equal('v1.2', r.left)
+      assert.are.equal('v1.3', r.right)
+    end)
+
+    it('parses a two-dot range with a relative (tilde) endpoint', function()
+      local r = git.parse_range('HEAD~1..HEAD')
+      assert.are.equal('..', r.dots)
+      assert.are.equal('HEAD~1', r.left)
+      assert.are.equal('HEAD', r.right)
+    end)
+
+    it('parses a three-dot range with an upstream (@{u}) endpoint', function()
+      local r = git.parse_range('@{u}...HEAD')
+      assert.are.equal('...', r.dots)
+      assert.are.equal('@{u}', r.left)
+      assert.are.equal('HEAD', r.right)
+    end)
   end)
 
   -- M.resolve_range() turns a parsed range into the { base_rev, head_rev }

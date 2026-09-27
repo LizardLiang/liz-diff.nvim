@@ -127,6 +127,254 @@ describe('liz-diff.init', function()
     end)
   end)
 
+  -- M.split_meta() backs M.open()'s cache-restore routing (Hermes M1): it
+  -- decides which of state.current_pr / state.current_range a cached session
+  -- meta object belongs in, keyed off `.kind`.
+  describe('split_meta()', function()
+    local liz_diff
+
+    before_each(function()
+      liz_diff = require('tests.helpers').reset_module('liz_diff')
+    end)
+
+    it('routes a kind="pr" meta into the pr slot only', function()
+      local meta = { kind = 'pr', n = 5 }
+      local pr_out, range_out = liz_diff.split_meta(meta)
+      assert.are.equal(meta, pr_out)
+      assert.is_nil(range_out)
+    end)
+
+    it('routes a kind="range" meta into the range slot only', function()
+      local meta = { kind = 'range', base_rev = 'a', head_rev = 'b' }
+      local pr_out, range_out = liz_diff.split_meta(meta)
+      assert.is_nil(pr_out)
+      assert.are.equal(meta, range_out)
+    end)
+
+    it('returns (nil, nil) for a nil meta (plain single-ref keyword)', function()
+      local pr_out, range_out = liz_diff.split_meta(nil)
+      assert.is_nil(pr_out)
+      assert.is_nil(range_out)
+    end)
+
+    it('returns (nil, nil) for a meta with no recognized kind', function()
+      local pr_out, range_out = liz_diff.split_meta({ foo = 'bar' })
+      assert.is_nil(pr_out)
+      assert.is_nil(range_out)
+    end)
+  end)
+
+  -- M.open() wiring — drives the real on_submit/on_select callbacks (captured
+  -- via a mocked ui.open, exactly like the real UI hands them to keymaps)
+  -- with git.diff/git.resolve_range/pr.detect_provider stubbed, so the
+  -- run_diff -> state -> open_file_at dispatch wiring is regression-tested
+  -- end to end without a live float or real git/network calls. This is the
+  -- harness Hermes's mutation run (M1-M4) showed was missing: each mutation
+  -- kept the then-171/171 suite green because nothing exercised this wiring,
+  -- only its already-pure pieces (resolve_open_mode, parse_range, ...).
+  describe('M.open() wiring — run_diff / on_select / next dispatch', function()
+    local liz_diff, ui, git, diff, pr, cache
+    local orig
+    local captured
+
+    before_each(function()
+      liz_diff = require('tests.helpers').reset_module('liz_diff')
+      ui = require('liz_diff.ui')
+      git = require('liz_diff.git')
+      diff = require('liz_diff.diff')
+      pr = require('liz_diff.pr')
+      cache = require('liz_diff.cache')
+      cache.clear()
+
+      orig = {
+        ui_open = ui.open,
+        ui_close = ui.close,
+        ui_is_open = ui.is_open,
+        ui_focus = ui.focus,
+        ui_set_prompt_text = ui.set_prompt_text,
+        ui_set_results = ui.set_results,
+        ui_set_error = ui.set_error,
+        ui_set_empty = ui.set_empty,
+        ui_get_cursor_index = ui.get_cursor_index,
+        ui_set_files_ref = ui._set_files_ref,
+        ui_format_line = ui.format_line,
+        git_is_git_repo = git.is_git_repo,
+        git_repo_root = git.repo_root,
+        git_diff = git.diff,
+        git_resolve_range = git.resolve_range,
+        pr_detect_provider = pr.detect_provider,
+        diff_open = diff.open,
+        diff_open_pr = diff.open_pr,
+        diff_open_commits = diff.open_commits,
+      }
+
+      captured = { cursor_index = 1 }
+      -- Mirrors real ui.open's contract: hand init.lua its three callbacks so
+      -- tests can invoke them directly, exactly as the real keymaps would.
+      ui.open = function(on_submit, on_select, on_refresh)
+        captured.on_submit = on_submit
+        captured.on_select = on_select
+        captured.on_refresh = on_refresh
+      end
+      ui.close = function() end
+      ui.is_open = function() return false end
+      ui.focus = function() end
+      ui.set_prompt_text = function() end
+      ui.set_results = function() end
+      ui.set_error = function(msg) captured.error = msg end
+      ui.set_empty = function() end
+      ui.get_cursor_index = function() return captured.cursor_index end
+      -- Normally assigned inside the real ui.open(); our mock above replaces
+      -- ui.open wholesale, so init.lua's ui._set_files_ref(files) call needs
+      -- a no-op here or it errors calling a nil value.
+      ui._set_files_ref = function() end
+      -- format_files() (init.lua) calls the real ui.format_line() on every
+      -- fetched file regardless of whether ui.set_results is mocked; the
+      -- fake file fixtures below only carry status/filepath, so the real
+      -- formatter (which needs numeric insertions/deletions) would error.
+      ui.format_line = function() return '' end
+
+      git.is_git_repo = function() return true end
+      git.repo_root = function() return '/fake/repo' end
+    end)
+
+    after_each(function()
+      ui.open = orig.ui_open
+      ui.close = orig.ui_close
+      ui.is_open = orig.ui_is_open
+      ui.focus = orig.ui_focus
+      ui.set_prompt_text = orig.ui_set_prompt_text
+      ui.set_results = orig.ui_set_results
+      ui.set_error = orig.ui_set_error
+      ui.set_empty = orig.ui_set_empty
+      ui.get_cursor_index = orig.ui_get_cursor_index
+      ui.format_line = orig.ui_format_line
+      ui._set_files_ref = orig.ui_set_files_ref
+      git.is_git_repo = orig.git_is_git_repo
+      git.repo_root = orig.git_repo_root
+      git.diff = orig.git_diff
+      git.resolve_range = orig.git_resolve_range
+      pr.detect_provider = orig.pr_detect_provider
+      diff.open = orig.diff_open
+      diff.open_pr = orig.diff_open_pr
+      diff.open_commits = orig.diff_open_commits
+      cache.clear()
+    end)
+
+    -- Hermes M2 (removed `state.current_range = resolved` in run_diff) / M3
+    -- (removed the 'range' branch in open_file_at): either mutation alone
+    -- means a resolved range keyword no longer reaches diff.open_commits.
+    it('a resolved range keyword dispatches to diff.open_commits on select, not open/open_pr', function()
+      git.diff = function(_, _, callback)
+        callback(nil, { { status = 'M', filepath = 'f.lua' } })
+        return {}
+      end
+      git.resolve_range = function() return { base_rev = 'X', head_rev = 'Y' } end
+
+      local commits_spec
+      diff.open_commits = function(spec) commits_spec = spec end
+      diff.open_pr = function() error('should not call open_pr for a range keyword') end
+      diff.open = function() error('should not call open for a range keyword') end
+
+      liz_diff.open()
+      captured.on_submit('a...b')
+      captured.on_select({ status = 'M', filepath = 'f.lua' })
+
+      assert.is_not_nil(commits_spec)
+      assert.are.equal('X', commits_spec.base_rev)
+      assert.are.equal('Y', commits_spec.head_rev)
+    end)
+
+    -- Hermes M1: reopening the float (cache-restore branch) must route a
+    -- cached RANGE meta into current_range, never current_pr. A mutation
+    -- reverting to `state.current_pr = cached.meta` puts the range object
+    -- straight into current_pr, which resolve_open_mode misreads as 'pr'.
+    it('reopening from cache restores a cached range session into current_range, not current_pr', function()
+      git.diff = function(_, _, callback)
+        callback(nil, { { status = 'M', filepath = 'f.lua' } })
+        return {}
+      end
+      git.resolve_range = function() return { base_rev = 'X', head_rev = 'Y' } end
+
+      liz_diff.open()
+      captured.on_submit('a...b')
+
+      -- Simulate closing and reopening the float: a second M.open() call
+      -- hits the cache-restore branch since state.current_keyword persists.
+      liz_diff.open()
+
+      local commits_calls, pr_calls = 0, 0
+      diff.open_commits = function() commits_calls = commits_calls + 1 end
+      diff.open_pr = function() pr_calls = pr_calls + 1 end
+      diff.open = function() error('should not call open for a restored range session') end
+
+      captured.on_select({ status = 'M', filepath = 'f.lua' })
+
+      assert.are.equal(1, commits_calls)
+      assert.are.equal(0, pr_calls)
+    end)
+
+    -- Hermes M4: switching from a resolved range keyword to a PR keyword
+    -- must clear current_range. Forcing pr.detect_provider to fail lets the
+    -- PR branch short-circuit right after its two clear-lines, isolating
+    -- exactly the assignment M4 removes (no CLI/network mocking needed).
+    it('switching from a resolved range to a PR keyword clears current_range', function()
+      git.diff = function(_, _, callback)
+        callback(nil, { { status = 'M', filepath = 'f.lua' } })
+        return {}
+      end
+      git.resolve_range = function() return { base_rev = 'X', head_rev = 'Y' } end
+      pr.detect_provider = function() return nil end
+
+      liz_diff.open()
+      captured.on_submit('a...b') -- primes current_range = { base_rev = 'X', head_rev = 'Y' }
+      captured.on_submit('#12') -- pr branch: clears current_pr/current_range, then errors on provider detection
+
+      assert.are.equal('liz-diff: could not detect GitHub/GitLab from the origin remote', captured.error)
+
+      local commits_calls = 0
+      diff.open_commits = function() commits_calls = commits_calls + 1 end
+      diff.open_pr = function() end
+      diff.open = function() end
+
+      captured.on_select({ status = 'M', filepath = 'f.lua' })
+
+      assert.are.equal(0, commits_calls)
+    end)
+
+    -- Hermes SUGGESTION 1: ]f/[f must keep using the keyword/mode/root the
+    -- user actually selected from, even if a LATER submit (never selected
+    -- from) changed the live current_* fields to a different keyword's.
+    it('a later submit without selecting does not corrupt an already-armed nav session', function()
+      git.diff = function(reference, _, callback)
+        if reference == 'main' then
+          callback(nil, { { status = 'M', filepath = 'main.lua' } })
+        else
+          callback(nil, { { status = 'M', filepath = 'range.lua' } })
+        end
+        return {}
+      end
+      git.resolve_range = function() return { base_rev = 'a', head_rev = 'b' } end
+
+      local open_calls = {}
+      diff.open = function(reference, file) open_calls[#open_calls + 1] = { reference = reference, file = file } end
+      diff.open_commits = function() error('should not reach open_commits for the frozen main-list nav session') end
+
+      liz_diff.open()
+      captured.on_submit('main')
+      captured.on_select({ status = 'M', filepath = 'main.lua' }) -- arms the nav session for 'main'
+
+      open_calls = {} -- isolate the effect of the later submit + ]f below
+      captured.on_submit('a...b') -- switches live fetch state; never selected from
+
+      liz_diff.next() -- ]f
+
+      assert.are.equal(1, #open_calls)
+      assert.are.equal('main', open_calls[1].reference)
+      assert.are.equal('main.lua', open_calls[1].file.filepath)
+    end)
+  end)
+
   -- Integration tests for open() flow
   pending('open() aborts with notify when not in git repo')
   pending('open() closes existing float before opening (toggle)')
