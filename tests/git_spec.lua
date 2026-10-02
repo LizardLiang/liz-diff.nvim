@@ -542,7 +542,7 @@ describe('liz-diff.git', function()
         assert.are.equal(0, #paths)
       end)
 
-      -- Path-relativity regression coverage (Hermes BLOCKER): `git ls-files`
+      -- Path-relativity coverage: `git ls-files`
       -- is cwd-relative by default, unlike `git diff --name-status`, which is
       -- always root-relative regardless of cwd. Scoping list_untracked to
       -- `root` via `-C` must produce root-relative paths (and cover the

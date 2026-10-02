@@ -34,7 +34,7 @@ end
 
 -- Also clears the :LizDiffPaths blink overlay (PATHS_NS) from every
 -- nav-mapped buffer — notably the non-wiped LEFT working buffer — so no
--- stale path overlay survives into the next diff session (PO-7).
+-- stale path overlay survives into the next diff session.
 local function clear_nav_keymaps()
   local keys = nav_keys()
   for _, buf in ipairs(nav_mapped_buffers) do
@@ -96,9 +96,9 @@ function M.ref_buffer_name(label, path, is_new_file)
   return name
 end
 
--- M.open's reference rev/label for a given prompt reference: empty prompt
--- now means "against HEAD" (all uncommitted changes), matching git.lua's
--- M.diff baseline change. Exported for the same reason as ref_buffer_name.
+-- M.open's reference rev/label for a given prompt reference: an empty prompt
+-- means "against HEAD" (all uncommitted changes), matching git.lua's M.diff
+-- baseline. Exported for the same reason as ref_buffer_name.
 function M.ref_rev(reference)
   return reference == '' and 'HEAD:' or (reference .. ':')
 end
@@ -398,8 +398,7 @@ end
 -- stack overlays, then re-renders and re-schedules the auto-clear. A fresh
 -- invocation supersedes any prior invocation's pending auto-clear (via
 -- paths_generation) so the newest overlay always gets its own full
--- PATHS_BLINK_MS lifetime instead of being cut short by a stale timer
--- (PO-5). INFO no-op when no window in the current tabpage has 'diff' set.
+-- PATHS_BLINK_MS lifetime instead of being cut short by a stale timer. INFO no-op when no window in the current tabpage has 'diff' set.
 function M.show_paths()
   local bufs = {}
   for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do

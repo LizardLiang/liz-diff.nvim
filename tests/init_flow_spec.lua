@@ -403,6 +403,89 @@ describe('liz-diff picker wiring', function()
     assert.are.equal(second, opened[1].pr)
   end)
 
+  describe('refreshing the same reference while it is fetching', function()
+    it('ignores the error of the stopped fetch', function()
+      liz.open()
+      local p = picker()
+      submit(p, 'main')
+      press(p.results, 'n', 'R')
+      assert.are.equal(2, #fetches)
+
+      finish(1, 'Unknown error')
+      assert.are.same({ 'Loading...' }, lines(p.results))
+      press(p.results, 'n', 'q')
+      liz.open()
+      p = picker()
+      assert.are.same({ 'Loading...' }, lines(p.results))
+
+      finish(2, nil, files3())
+      assert.are.equal(3, #lines(p.results))
+      select_row(p, 1)
+      assert.are.equal('a.lua', opened[1].path)
+    end)
+
+    it('keeps the newer list when the older fetch succeeds later', function()
+      liz.open()
+      local p = picker()
+      submit(p, 'main')
+      press(p.results, 'n', 'R')
+
+      finish(1, nil, { f('old.lua') })
+      assert.are.same({ 'Loading...' }, lines(p.results))
+      assert.is_nil(cache.get('main'))
+
+      finish(2, nil, files3())
+      finish(1, nil, { f('old.lua') })
+      assert.are.equal(3, #lines(p.results))
+      assert.are.equal(3, #cache.get('main').files)
+      select_row(p, 1)
+      assert.are.equal('a.lua', opened[1].path)
+    end)
+
+    it('ignores a commit check that finishes after the refresh', function()
+      local info1 = { number = 12, base_oid = 'b1', head_oid = 'h1' }
+      local info2 = { number = 12, base_oid = 'b2', head_oid = 'h2' }
+      local infos = { info1, info2 }
+      local ensures = {}
+      stub_pr(infos)
+      pr_module.ensure_commits = function(_, callback)
+        ensures[#ensures + 1] = callback
+      end
+      liz.open()
+      local p = picker()
+      submit(p, '#12')
+      press(p.results, 'n', 'R')
+      assert.are.equal(2, #ensures)
+
+      ensures[2](nil)
+      assert.are.equal(1, #fetches)
+      finish(1, nil, files3())
+      ensures[1](nil)
+      assert.are.equal(1, #fetches)
+      select_row(p, 1)
+      assert.are.equal(info2, opened[1].pr)
+      assert.are.equal(info2, cache.get('#12').meta)
+    end)
+  end)
+
+  it('does not move the cursor of a refreshed list from an older nav session', function()
+    liz.open()
+    local p = picker()
+    submit(p, 'main')
+    finish(1, nil, files3())
+    select_row(p, 2)
+
+    liz.open()
+    p = picker()
+    press(p.results, 'n', 'R')
+    finish(2, nil, files3())
+    press(p.results, 'n', 'q')
+    assert.are.equal(1, cache.get('main').cursor_index)
+
+    liz.next()
+    assert.are.equal(1, cache.get('main').cursor_index)
+  end)
+
   it('shows the prompt text and Loading when reopened during the first fetch', function()
     liz.open()
     local p = picker()

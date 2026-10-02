@@ -13,10 +13,14 @@ local state = {
   current_keyword = nil,
   -- Keyword whose fetch has not reached a result, error or empty outcome yet.
   fetching = nil,
+  -- Id of the newest fetch. Every async callback compares its own id with this
+  -- one, so a superseded fetch of the same keyword changes nothing.
+  fetch_token = 0,
   -- Active :LizDiffNext / :LizDiffPrev session, captured when a file is
-  -- selected: { keyword, mode, pr, range, root, files, filter, index }. `mode`
-  -- is M.resolve_open_mode's routing, fixed at selection. Later picker use
-  -- never changes it.
+  -- selected: { keyword, mode, pr, range, root, files, source, filter, index }.
+  -- `mode` is M.resolve_open_mode's routing, fixed at selection. `source` is
+  -- the unfiltered list `files` was filtered from. Later picker use never
+  -- changes it.
   nav = nil,
   active_jobs = {},
 }
@@ -104,11 +108,11 @@ end
 
 -- Opens the diff for the file at `index` in the active nav session, wrapping the
 -- index into range first. Records the new position, syncs the session's cached
--- cursor so a reopen lands on this file (only while the cached filter is the
--- one the list was built with, since the cursor indexes the filtered rows),
--- dispatches on the session's mode to diff.open_pr / diff.open_commits /
--- diff.open, and echoes `path (i/n)`. Reads only the session, never the
--- picker's state.
+-- cursor so a reopen lands on this file (only while the cache still holds the
+-- list the session came from, under the filter it was built with, since the
+-- cursor indexes the filtered rows), dispatches on the session's mode to
+-- diff.open_pr / diff.open_commits / diff.open, and echoes `path (i/n)`.
+-- Reads only the session, never the picker's state.
 local function open_file_at(index)
   local nav = state.nav
   if not nav or #nav.files == 0 then
@@ -119,7 +123,7 @@ local function open_file_at(index)
   nav.index = index
   local file = nav.files[index]
   local cached = cache.get(nav.keyword)
-  if cached and cached.filter == nav.filter then
+  if cached and cached.files == nav.source and cached.filter == nav.filter then
     cache.set_cursor(nav.keyword, index)
   end
   if nav.mode == 'pr' then
@@ -169,6 +173,8 @@ function M.open()
       pcall(vim.fn.jobstop, job_id)
     end
     state.active_jobs = {}
+    state.fetch_token = state.fetch_token + 1
+    local token = state.fetch_token
     state.current_keyword = keyword
     state.fetching = keyword
 
@@ -188,8 +194,11 @@ function M.open()
     local pr_info = nil
 
     local function on_result(err, files)
-      if keyword ~= state.current_keyword then
-        if not err and files and #files > 0 then
+      if token ~= state.fetch_token then
+        -- A superseded fetch still fills the cache for a keyword that has no
+        -- entry, never one a newer fetch of that keyword may have written.
+        if not err and files and #files > 0 and keyword ~= state.current_keyword
+          and not cache.get(keyword) then
           cache.set(keyword, files, pr_info, root)
         end
         return
@@ -246,7 +255,7 @@ function M.open()
       end
 
       state.active_jobs = git.diff(keyword, root, function(err, files)
-        if not err and range_error then
+        if token == state.fetch_token and not err and range_error then
           vim.notify(range_error, vim.log.levels.WARN)
         end
         on_result(err, files)
@@ -265,7 +274,7 @@ function M.open()
     end
 
     state.active_jobs = pr.resolve(pr_number, provider, function(rerr, info)
-      if keyword ~= state.current_keyword then
+      if token ~= state.fetch_token then
         return
       end
       if rerr then
@@ -274,7 +283,7 @@ function M.open()
         return
       end
       pr.ensure_commits(info, function(eerr)
-        if keyword ~= state.current_keyword then
+        if token ~= state.fetch_token then
           return
         end
         if eerr then
@@ -331,6 +340,7 @@ function M.open()
       range = model.range,
       root = model.root,
       files = ui.get_files(),
+      source = model.all_files,
       filter = model.applied_filter,
       index = idx,
     }

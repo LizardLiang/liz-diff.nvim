@@ -44,8 +44,7 @@ describe('liz-diff.diff', function()
   end)
 
   -- resolve_ref_content() backs M.open()'s "always attempt git show, never a
-  -- silent unexplained blank pane" contract (tactical plan step 3 / spec-delta
-  -- "Reference Pane Fallback In List Flow"). Mocked vim.fn.system + a
+  -- silent unexplained blank pane" contract. Mocked vim.fn.system + a
   -- monkey-patched git.is_new_file keep this a pure-logic unit test, no real
   -- Neovim splits required.
   describe('resolve_ref_content()', function()
@@ -93,8 +92,7 @@ describe('liz-diff.diff', function()
     end)
   end)
 
-  -- M.pane_path() backs :LizDiffPaths' on-disk-vs-virtual display rule
-  -- (tactical plan liz-diff-show-paths / spec-delta path-overlay.md PO-3/PO-4).
+  -- M.pane_path() backs :LizDiffPaths' on-disk-vs-virtual display rule.
   -- Runs against real (throwaway) Neovim buffers rather than mocks, since the
   -- function itself is a handful of real vim.b / nvim_buf_get_name /
   -- vim.bo reads.
@@ -134,7 +132,7 @@ describe('liz-diff.diff', function()
     end)
   end)
 
-  -- M.show_paths()'s no-active-diff branch (PO-6): INFO notify, no extmark.
+  -- M.show_paths()'s no-active-diff branch: INFO notify, no extmark.
   -- The "overlay renders / blinks / clears" branch needs real diff windows
   -- and is left as an integration pending case below, matching this file's
   -- existing convention for window-dependent behavior.
@@ -186,7 +184,7 @@ describe('liz-diff.diff', function()
     end)
   end)
 
-  -- Race guard (PO-5): a second show_paths() within PATHS_BLINK_MS must not
+  -- Race guard: a second show_paths() within PATHS_BLINK_MS must not
   -- have its overlay wiped early by the first call's stale deferred clear.
   -- vim.defer_fn is stubbed to capture callbacks instead of scheduling a
   -- real timer, so both the stale and the fresh callback can be invoked

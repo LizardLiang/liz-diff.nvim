@@ -389,9 +389,8 @@ describe('liz-diff.init', function()
   pending('refresh key re-runs git.diff for current ref preserving cursor')
   pending('refresh is a no-op when no ref submitted yet')
 
-  -- Repo-root threading (tactical plan step 2 / spec-delta "Repo-Root Scoped
-  -- List Diffs"): root is resolved once per run_diff fetch, cached alongside
-  -- files/meta, and restored on a cache-backed reopen.
+  -- Repo-root threading: root is resolved once per run_diff fetch, cached
+  -- alongside files/meta, and restored on a cache-backed reopen.
   pending('on_select passes the root resolved at fetch time to diff.open / diff.open_pr')
   pending('run_diff aborts with a loud error when repo root cannot be resolved')
   pending('reopening from cache restores the root recorded at fetch time')
