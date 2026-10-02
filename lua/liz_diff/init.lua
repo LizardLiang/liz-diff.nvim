@@ -151,8 +151,15 @@ function M.open()
     ui._set_files_ref(shown_files)
   end
 
+  local function clear_shown()
+    all_files = nil
+    shown_files = nil
+    ui._set_files_ref({})
+  end
+
   local function run_diff(keyword, cursor_index)
     all_files = nil
+    shown_files = nil
     for _, job_id in ipairs(state.active_jobs) do
       pcall(vim.fn.jobstop, job_id)
     end
@@ -186,13 +193,18 @@ function M.open()
       end
       state.active_jobs = {}
       if err then
+        clear_shown()
         ui.set_error(err)
       elseif #files == 0 then
+        clear_shown()
         ui.set_empty(keyword)
       else
         cache.set(keyword, files, pr_info, root)
+        if ui.is_open() then
+          cache.set_filter(keyword, ui.get_filter_text())
+        end
         all_files = files
-        show_files(files, cursor_index)
+        show_files(files, cursor_index, ui.is_filter_focused())
       end
     end
 
@@ -286,10 +298,13 @@ function M.open()
   end
 
   local function on_filter(text)
-    if text == applied_filter or not all_files then
+    if text == applied_filter then
       return
     end
     cache.set_filter(state.current_keyword, text)
+    if not all_files then
+      return
+    end
     show_files(all_files, 1, true)
   end
 

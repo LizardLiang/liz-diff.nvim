@@ -138,6 +138,10 @@ function M.set_prompt_text(text)
   end
 end
 
+function M.is_filter_focused()
+  return win_valid(state.filter_win) and vim.api.nvim_get_current_win() == state.filter_win
+end
+
 function M.get_filter_text()
   if buf_valid(state.filter_buf) then
     return vim.api.nvim_buf_get_lines(state.filter_buf, 0, 1, false)[1] or ''
