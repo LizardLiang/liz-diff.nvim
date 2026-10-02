@@ -8,10 +8,8 @@ local PATHS_NS = vim.api.nvim_create_namespace('liz_diff_paths')
 local PATHS_BLINK_MS = 2000
 
 -- Bumped on every M.show_paths() call; the deferred auto-clear captures its
--- own generation and no-ops if a later invocation has superseded it. Without
--- this guard, two show_paths() calls within PATHS_BLINK_MS race: the first
--- call's stale deferred clear fires and wipes the second call's fresh
--- overlay early instead of letting it run its own full PATHS_BLINK_MS (PO-5).
+-- own generation and no-ops if a later invocation has superseded it, so an
+-- earlier call's clear never wipes a later call's overlay.
 local paths_generation = 0
 
 local ref_buffers = {}

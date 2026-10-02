@@ -107,23 +107,15 @@ end
 
 function M.close()
   state.closing = true
-  if state.prompt_win and vim.api.nvim_win_is_valid(state.prompt_win) then
-    vim.api.nvim_win_close(state.prompt_win, true)
+  for _, win in ipairs({ state.prompt_win, state.results_win, state.filter_win }) do
+    if win_valid(win) then
+      pcall(vim.api.nvim_win_close, win, true)
+    end
   end
-  if state.results_win and vim.api.nvim_win_is_valid(state.results_win) then
-    vim.api.nvim_win_close(state.results_win, true)
-  end
-  if win_valid(state.filter_win) then
-    vim.api.nvim_win_close(state.filter_win, true)
-  end
-  if state.prompt_buf and vim.api.nvim_buf_is_valid(state.prompt_buf) then
-    vim.api.nvim_buf_delete(state.prompt_buf, { force = true })
-  end
-  if state.results_buf and vim.api.nvim_buf_is_valid(state.results_buf) then
-    vim.api.nvim_buf_delete(state.results_buf, { force = true })
-  end
-  if buf_valid(state.filter_buf) then
-    vim.api.nvim_buf_delete(state.filter_buf, { force = true })
+  for _, buf in ipairs({ state.prompt_buf, state.results_buf, state.filter_buf }) do
+    if buf_valid(buf) then
+      pcall(vim.api.nvim_buf_delete, buf, { force = true })
+    end
   end
   state.filter_buf = nil
   state.filter_win = nil

@@ -10,6 +10,7 @@ end
 describe('liz-diff picker wiring', function()
   local liz, ui, cache, config
   local fetches, opened
+  local pr_module, pr_originals
 
   local function row_of(win)
     local r = vim.api.nvim_win_get_config(win).row
@@ -83,6 +84,14 @@ describe('liz-diff picker wiring', function()
     require('liz_diff.diff').open = function(ref, file, root)
       opened[#opened + 1] = { ref = ref, path = file.filepath, root = root }
     end
+    require('liz_diff.diff').open_pr = function(info, file, root)
+      opened[#opened + 1] = { pr = info, path = file.filepath, root = root }
+    end
+    pr_module = require('liz_diff.pr')
+    pr_originals = {}
+    for _, name in ipairs({ 'detect_provider', 'origin_url', 'resolve', 'ensure_commits' }) do
+      pr_originals[name] = pr_module[name]
+    end
     config = require('liz_diff.config')
     liz = require('liz_diff')
     ui = require('liz_diff.ui')
@@ -92,7 +101,21 @@ describe('liz-diff picker wiring', function()
   after_each(function()
     ui.close()
     vim.cmd('stopinsert')
+    for name, fn in pairs(pr_originals) do
+      pr_module[name] = fn
+    end
   end)
+
+  -- Makes every PR keyword resolve at once, handing out `infos` in order.
+  local function stub_pr(infos)
+    pr_module.detect_provider = function() return 'github' end
+    pr_module.origin_url = function() return 'git@example.com:o/r.git' end
+    pr_module.resolve = function(_, _, callback)
+      callback(nil, table.remove(infos, 1))
+      return {}
+    end
+    pr_module.ensure_commits = function(_, callback) callback(nil) end
+  end
 
   local files3 = function()
     return { f('a.lua'), f('b.md'), f('c.lua') }
@@ -295,6 +318,168 @@ describe('liz-diff picker wiring', function()
       return vim.fn.maparg('/', 'n', false, true)
     end)
     assert.are.equal(0, vim.tbl_count(map))
+  end)
+
+  describe('navigating after the picker was reused', function()
+    it('keeps walking the list it was selected from after another ref is submitted', function()
+      liz.open()
+      local p = picker()
+      submit(p, 'main')
+      finish(1, nil, files3())
+      select_row(p, 1)
+      assert.are.equal('main', opened[1].ref)
+
+      require('liz_diff.git').repo_root = function() return 'C:/other' end
+      liz.open()
+      p = picker()
+      submit(p, 'dev')
+      finish(2, nil, files3())
+      press(p.results, 'n', 'q')
+
+      liz.next()
+      assert.are.same({ ref = 'main', path = 'b.md', root = 'C:/repo' }, opened[2])
+      assert.are.equal(1, cache.get('dev').cursor_index)
+      assert.are.equal(2, cache.get('main').cursor_index)
+    end)
+
+    it('does not open a PR diff for a list selected from a raw ref', function()
+      stub_pr({ { number = 12, base_oid = 'b', head_oid = 'h' } })
+      liz.open()
+      local p = picker()
+      submit(p, 'main')
+      finish(1, nil, files3())
+      select_row(p, 1)
+
+      liz.open()
+      p = picker()
+      submit(p, '#12')
+      press(p.results, 'n', 'q')
+
+      liz.next()
+      assert.is_nil(opened[2].pr)
+      assert.are.equal('main', opened[2].ref)
+      assert.are.equal('b.md', opened[2].path)
+    end)
+
+    it('opens the PR of the list it was selected from', function()
+      local info = { number = 12, base_oid = 'b', head_oid = 'h' }
+      stub_pr({ info })
+      liz.open()
+      local p = picker()
+      submit(p, '#12')
+      finish(1, nil, files3())
+      select_row(p, 1)
+
+      liz.open()
+      p = picker()
+      submit(p, 'dev')
+      press(p.results, 'n', 'q')
+
+      liz.next()
+      assert.are.equal(info, opened[2].pr)
+      assert.are.equal('b.md', opened[2].path)
+    end)
+  end)
+
+  it('diffs a list that arrives after a cached reopen with the PR it was fetched for', function()
+    local first = { number = 12, base_oid = 'b1', head_oid = 'h1' }
+    local second = { number = 12, base_oid = 'b2', head_oid = 'h2' }
+    stub_pr({ first, second })
+    liz.open()
+    local p = picker()
+    submit(p, '#12')
+    finish(1, nil, files3())
+    press(p.results, 'n', 'q')
+
+    liz.open()
+    p = picker()
+    press(p.results, 'n', 'R')
+    press(p.results, 'n', 'q')
+
+    liz.open()
+    p = picker()
+    finish(2, nil, files3())
+    select_row(p, 1)
+    assert.are.equal(second, opened[1].pr)
+  end)
+
+  it('shows the prompt text and Loading when reopened during the first fetch', function()
+    liz.open()
+    local p = picker()
+    submit(p, 'main')
+    press(p.results, 'n', 'q')
+
+    liz.open()
+    p = picker()
+    assert.are.equal('main', lines(p.prompt)[1])
+    assert.are.same({ 'Loading...' }, lines(p.results))
+    select_row(p, 1)
+    assert.are.equal(0, #opened)
+
+    finish(1, nil, files3())
+    assert.are.equal(3, #lines(p.results))
+  end)
+
+  it('stops showing Loading on reopen once the fetch failed', function()
+    liz.open()
+    local p = picker()
+    submit(p, 'main')
+    finish(1, 'boom')
+    press(p.results, 'n', 'q')
+
+    liz.open()
+    p = picker()
+    assert.are_not.same({ 'Loading...' }, lines(p.results))
+  end)
+
+  it('offers no stale list on reopen after a refresh came back empty', function()
+    liz.open()
+    local p = picker()
+    submit(p, 'main')
+    finish(1, nil, files3())
+    press(p.results, 'n', 'R')
+    finish(2, nil, {})
+    press(p.results, 'n', 'q')
+    assert.is_nil(cache.get('main'))
+
+    liz.open()
+    p = picker()
+    select_row(p, 1)
+    assert.are.equal(0, #opened)
+  end)
+
+  it('keeps the last good list when a refresh fails', function()
+    liz.open()
+    local p = picker()
+    submit(p, 'main')
+    finish(1, nil, files3())
+    press(p.results, 'n', 'R')
+    finish(2, 'boom')
+    press(p.results, 'n', 'q')
+
+    liz.open()
+    p = picker()
+    select_row(p, 1)
+    assert.are.equal('a.lua', opened[1].path)
+  end)
+
+  it('still closes a picker float after a close attempt that threw', function()
+    liz.open()
+    local real_close = vim.api.nvim_win_close
+    vim.api.nvim_win_close = function() error('E11: Invalid in command-line window') end
+    local ok = pcall(ui.close)
+    vim.api.nvim_win_close = real_close
+    assert.is_true(ok)
+
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+      if vim.api.nvim_win_get_config(win).relative ~= '' then
+        real_close(win, true)
+      end
+    end
+    liz.open()
+    vim.api.nvim_win_close(picker().filter_win, true)
+    vim.wait(200, function() return not ui.is_open() end)
+    assert.is_false(ui.is_open())
   end)
 
   describe('closing a float', function()

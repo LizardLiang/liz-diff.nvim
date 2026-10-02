@@ -11,16 +11,12 @@ M._VERSION = "0.11.0"
 
 local state = {
   current_keyword = nil,
-  current_pr = nil,
-  current_range = nil,
-  current_root = nil,
-  -- The active :LizDiffNext/:LizDiffPrev session: nil until on_select() first
-  -- arms it. A frozen snapshot -- { keyword, root, mode, pr, range, files,
-  -- index, filter } -- taken ONCE at selection time, not re-derived from the
-  -- live current_* fields above on every ]f/[f. Without this freeze,
-  -- submitting a new keyword (without selecting from its results) would
-  -- silently swap the meta/mode used by ]f/[f out from under an already-armed
-  -- session for a DIFFERENT keyword's file list.
+  -- Keyword whose fetch has not reached a result, error or empty outcome yet.
+  fetching = nil,
+  -- Active :LizDiffNext / :LizDiffPrev session, captured when a file is
+  -- selected: { keyword, mode, pr, range, root, files, filter, index }. `mode`
+  -- is M.resolve_open_mode's routing, fixed at selection. Later picker use
+  -- never changes it.
   nav = nil,
   active_jobs = {},
 }
@@ -28,10 +24,16 @@ local state = {
 -- Picker model, shared by every open so a fetch that finishes after the picker
 -- was closed and reopened still updates the live one. `all_files` is the
 -- unfiltered list for the current keyword and `applied_filter` the filter text
--- last applied to it. The filtered rows on screen live in ui (ui.get_files).
+-- last applied to it. `pr`, `range` and `root` are the PR meta, the resolved
+-- commit-range meta (both nil for a raw ref) and the repo root the list was
+-- fetched with. The filtered rows on screen live in ui
+-- (ui.get_files).
 local model = {
   all_files = nil,
   applied_filter = '',
+  pr = nil,
+  range = nil,
+  root = nil,
 }
 
 function M.setup(opts)
@@ -100,17 +102,16 @@ function M.split_meta(meta)
   return nil, nil
 end
 
--- Opens the diff for the file at `index` in the FROZEN nav session
--- (state.nav -- see its declaration above for why it's frozen rather than
--- read live from state.current_*). Wraps the index into range first, records
--- the new position, syncs the picker's cached cursor so a reopen lands on
--- this file (only while the cached filter is the one the list was built
--- with, since the cursor indexes the filtered rows), dispatches through
--- M.resolve_open_mode's mode (captured in the nav session at select time) to
--- diff.open_pr / diff.open_commits / diff.open, and echoes `path (i/n)`.
+-- Opens the diff for the file at `index` in the active nav session, wrapping the
+-- index into range first. Records the new position, syncs the session's cached
+-- cursor so a reopen lands on this file (only while the cached filter is the
+-- one the list was built with, since the cursor indexes the filtered rows),
+-- dispatches on the session's mode to diff.open_pr / diff.open_commits /
+-- diff.open, and echoes `path (i/n)`. Reads only the session, never the
+-- picker's state.
 local function open_file_at(index)
   local nav = state.nav
-  if not nav or not nav.files or #nav.files == 0 then
+  if not nav or #nav.files == 0 then
     return
   end
   local n = #nav.files
@@ -121,7 +122,6 @@ local function open_file_at(index)
   if cached and cached.filter == nav.filter then
     cache.set_cursor(nav.keyword, index)
   end
-
   if nav.mode == 'pr' then
     diff.open_pr(nav.pr, file, nav.root)
   elseif nav.mode == 'range' then
@@ -170,15 +170,14 @@ function M.open()
     end
     state.active_jobs = {}
     state.current_keyword = keyword
+    state.fetching = keyword
 
     -- Repo root resolved once per fetch (not once globally): scopes every git
     -- call and `:edit` for selections made from this list to the root that
     -- was current when the list was fetched, regardless of later cwd drift.
     local root = git.repo_root()
-    state.current_root = root
     if not root then
-      state.current_pr = nil
-      state.current_range = nil
+      state.fetching = nil
       ui.set_error('liz-diff: could not resolve repository root')
       return
     end
@@ -196,14 +195,18 @@ function M.open()
         return
       end
       state.active_jobs = {}
+      state.fetching = nil
       if err then
         model.all_files = nil
         ui.set_error(err)
       elseif #files == 0 then
         model.all_files = nil
+        cache.delete(keyword)
         ui.set_empty(keyword)
       else
         cache.set(keyword, files, pr_info, root)
+        model.pr, model.range = M.split_meta(pr_info)
+        model.root = root
         if ui.is_open() then
           cache.set_filter(keyword, ui.get_filter_text())
         end
@@ -214,14 +217,11 @@ function M.open()
 
     local pr_number = pr.parse_keyword(keyword)
     if not pr_number then
-      state.current_pr = nil
-      state.current_range = nil
-
       -- Commit-range keyword (`a..b` / `a...b`): resolve base/head ONCE here
       -- (not per file, per open_file_at's routing) so every file opened from
       -- this list reuses the same pair. Resolution is local/synchronous (at
       -- worst one `git merge-base` call) — no forge CLI or network involved,
-      -- unlike the PR flow below. A resolution failure leaves state.current_range
+      -- unlike the PR flow below. A resolution failure leaves the range meta
       -- nil (open_file_at then routes to a notify-only no-op instead of
       -- M.open() for this keyword — see M.resolve_open_mode's
       -- 'range-unresolved' branch), but the WARN notification for it is
@@ -239,7 +239,6 @@ function M.open()
         if resolved then
           resolved.kind = 'range'
           resolved.label = keyword
-          state.current_range = resolved
           pr_info = resolved
         else
           range_error = rerr
@@ -258,10 +257,9 @@ function M.open()
     -- PR/MR flow: detect provider from origin, resolve base/head via the forge
     -- CLI, ensure the commits are local (auto-fetch), then feed the three-dot
     -- range into the existing git.diff pipeline.
-    state.current_pr = nil
-    state.current_range = nil
     local provider = pr.detect_provider(pr.origin_url())
     if not provider then
+      state.fetching = nil
       ui.set_error('liz-diff: could not detect GitHub/GitLab from the origin remote')
       return
     end
@@ -271,6 +269,7 @@ function M.open()
         return
       end
       if rerr then
+        state.fetching = nil
         ui.set_error(rerr)
         return
       end
@@ -279,12 +278,12 @@ function M.open()
           return
         end
         if eerr then
+          state.fetching = nil
           ui.set_error(eerr)
           return
         end
         info.kind = 'pr'
         pr_info = info
-        state.current_pr = info
         local range = info.base_oid .. '...' .. info.head_oid
         local jobs = git.diff(range, root, on_result)
         for _, j in ipairs(jobs) do
@@ -321,18 +320,16 @@ function M.open()
   end
 
   local function on_select()
-    -- Arms state.nav (the FROZEN nav session :LizDiffNext / ]f read from) from
-    -- the CURRENT current_*/keyword fields, all captured together in one
-    -- snapshot so a later submit for a different keyword (without selecting
-    -- from ITS results) can't desync the file list from the mode/pr/range/root
-    -- used to open it. The file's row index drives navigation from here on.
+    -- Capture the filtered list as an active nav session so :LizDiffNext / ]f
+    -- can move to sibling files without reopening the picker. The file's row
+    -- index drives navigation from here on.
     local idx = ui.get_cursor_index()
     state.nav = {
       keyword = state.current_keyword,
-      root = state.current_root,
-      mode = M.resolve_open_mode(state.current_pr, state.current_range, state.current_keyword),
-      pr = state.current_pr,
-      range = state.current_range,
+      mode = M.resolve_open_mode(model.pr, model.range, state.current_keyword),
+      pr = model.pr,
+      range = model.range,
+      root = model.root,
       files = ui.get_files(),
       filter = model.applied_filter,
       index = idx,
@@ -347,20 +344,20 @@ function M.open()
 
   if state.current_keyword then
     local cached = cache.get(state.current_keyword)
+    ui.set_prompt_text(state.current_keyword)
     if cached then
-      ui.set_prompt_text(state.current_keyword)
       ui.set_filter_text(cached.filter)
       model.all_files = cached.files
+      -- PR or range context (both nil for a raw ref) and root recorded when
+      -- this list was fetched, so a selection from it scopes to the same
+      -- PR/range and repo even if Neovim's cwd has since changed. Routed
+      -- through M.split_meta: assigning `cached.meta` straight into model.pr
+      -- would put a cached RANGE meta into the PR slot.
+      model.pr, model.range = M.split_meta(cached.meta)
+      model.root = cached.root
       show_files(cached.files, cached.cursor_index)
-      -- Restore PR/range context (both nil for a raw ref) so a select from
-      -- the restored list diffs head-vs-base without re-resolving. Routed
-      -- through M.split_meta: a direct `state.current_pr = cached.meta` would
-      -- put a cached RANGE meta into the PR slot.
-      state.current_pr, state.current_range = M.split_meta(cached.meta)
-      -- Restore the root recorded when this list was fetched, so a selection
-      -- from the restored (cached) list scopes to the same repo even if
-      -- Neovim's cwd has since changed.
-      state.current_root = cached.root
+    elseif state.fetching == state.current_keyword then
+      show_loading()
     end
   end
 end
@@ -368,20 +365,21 @@ end
 -- Navigate to the next/previous file in the active list, wrapping at the ends.
 -- No-ops with an INFO notify when no list has been selected from (e.g. after
 -- only :LizDiffFile, which has no list).
-function M.next()
-  if not state.nav or not state.nav.files or #state.nav.files == 0 then
+local function step(delta)
+  local nav = state.nav
+  if not nav or #nav.files == 0 then
     vim.notify('liz-diff: no active file list', vim.log.levels.INFO)
     return
   end
-  open_file_at((state.nav.index or 1) + 1)
+  open_file_at((nav.index or 1) + delta)
+end
+
+function M.next()
+  step(1)
 end
 
 function M.prev()
-  if not state.nav or not state.nav.files or #state.nav.files == 0 then
-    vim.notify('liz-diff: no active file list', vim.log.levels.INFO)
-    return
-  end
-  open_file_at((state.nav.index or 1) - 1)
+  step(-1)
 end
 
 function M.open_current(ref)

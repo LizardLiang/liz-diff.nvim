@@ -134,6 +134,21 @@ describe('liz-diff.cache', function()
     end)
   end)
 
+  describe('delete()', function()
+    it('removes only the given keyword', function()
+      cache.set('main', {})
+      cache.set('dev', {})
+      cache.delete('main')
+      assert.is_nil(cache.get('main'))
+      assert.is_not_nil(cache.get('dev'))
+    end)
+
+    it('is a no-op for an unknown keyword', function()
+      cache.delete('nope')
+      assert.is_nil(cache.get('nope'))
+    end)
+  end)
+
   describe('clear()', function()
     it('removes all cached entries', function()
       cache.set('main', {

@@ -342,10 +342,9 @@ function M.diff(reference, root, callback)
     cmd1[#cmd1 + 1] = reference
     cmd2[#cmd2 + 1] = reference
   elseif head_resolves() then
-    -- Empty prompt now means "all uncommitted changes": worktree + index vs
-    -- HEAD, instead of the old bare index diff. Skipped entirely on an
-    -- unborn HEAD (no commits yet) — falls back to the original bare
-    -- `git diff` commands built above.
+    -- Empty prompt means "all uncommitted changes": worktree + index vs HEAD.
+    -- Skipped on an unborn HEAD (no commits yet), where the bare `git diff`
+    -- commands built above are used.
     cmd1[#cmd1 + 1] = 'HEAD'
     cmd2[#cmd2 + 1] = 'HEAD'
   end

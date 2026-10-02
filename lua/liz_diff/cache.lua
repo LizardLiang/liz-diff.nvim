@@ -32,6 +32,10 @@ function M.set_cursor(keyword, index)
   end
 end
 
+function M.delete(keyword)
+  cache[keyword] = nil
+end
+
 function M.clear()
   cache = {}
 end
