@@ -7,13 +7,88 @@ local state = {
   prompt_win = nil,
   results_buf = nil,
   results_win = nil,
+  filter_buf = nil,
+  filter_win = nil,
+  refresh_filter_placeholder = function() end,
 }
+
+local PROMPT_PLACEHOLDER = 'Enter git ref, or #<PR> / !<MR>... '
+local FILTER_PLACEHOLDER = 'Filter by name or .ext... '
 
 function M.format_line(file)
   if file.binary then
     return string.format('%-2s %-50s [binary]', file.status, file.filepath)
   end
   return string.format('%-2s %-50s +%-4d -%d', file.status, file.filepath, file.insertions, file.deletions)
+end
+
+-- Pure matcher behind the filter float. Whitespace-separated terms, matched
+-- case-insensitively against the full filepath: a term starting with `.` or
+-- `*.` is an extension term (path ends with it, several are OR'ed); any other
+-- term is a literal substring (several are AND'ed). A file must satisfy both
+-- groups. Order is preserved; an empty query returns every file.
+function M.filter_files(files, query)
+  local exts, names = {}, {}
+  for term in (query or ''):lower():gmatch('%S+') do
+    local ext = term:match('^%*?(%..+)$')
+    if ext then
+      exts[#exts + 1] = ext
+    else
+      names[#names + 1] = term
+    end
+  end
+
+  local result = {}
+  for _, file in ipairs(files) do
+    local path = file.filepath:lower()
+    local ok = #exts == 0
+    for _, ext in ipairs(exts) do
+      if path:sub(-#ext) == ext then
+        ok = true
+        break
+      end
+    end
+    if ok then
+      for _, name in ipairs(names) do
+        if not path:find(name, 1, true) then
+          ok = false
+          break
+        end
+      end
+    end
+    if ok then
+      result[#result + 1] = file
+    end
+  end
+  return result
+end
+
+function M.no_match_message(query)
+  return string.format('No files match "%s"', vim.trim(query))
+end
+
+local function win_valid(win)
+  return win ~= nil and vim.api.nvim_win_is_valid(win)
+end
+
+local function buf_valid(buf)
+  return buf ~= nil and vim.api.nvim_buf_is_valid(buf)
+end
+
+-- Overlays `text` as a dim hint on line 1 of `buf` while the line is empty.
+-- Returns the refresh function to call after the buffer text changes.
+local function attach_placeholder(buf, text)
+  local ns = vim.api.nvim_create_namespace('liz_diff_placeholder')
+  return function()
+    vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
+    if (vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1] or '') == '' then
+      vim.api.nvim_buf_set_extmark(buf, ns, 0, 0, {
+        virt_text = { { text, 'Comment' } },
+        virt_text_pos = 'overlay',
+        hl_mode = 'combine',
+      })
+    end
+  end
 end
 
 function M.is_open()
@@ -37,12 +112,20 @@ function M.close()
   if state.results_win and vim.api.nvim_win_is_valid(state.results_win) then
     vim.api.nvim_win_close(state.results_win, true)
   end
+  if win_valid(state.filter_win) then
+    vim.api.nvim_win_close(state.filter_win, true)
+  end
   if state.prompt_buf and vim.api.nvim_buf_is_valid(state.prompt_buf) then
     vim.api.nvim_buf_delete(state.prompt_buf, { force = true })
   end
   if state.results_buf and vim.api.nvim_buf_is_valid(state.results_buf) then
     vim.api.nvim_buf_delete(state.results_buf, { force = true })
   end
+  if buf_valid(state.filter_buf) then
+    vim.api.nvim_buf_delete(state.filter_buf, { force = true })
+  end
+  state.filter_buf = nil
+  state.filter_win = nil
   state.prompt_buf = nil
   state.prompt_win = nil
   state.results_buf = nil
@@ -55,6 +138,20 @@ function M.set_prompt_text(text)
   end
 end
 
+function M.get_filter_text()
+  if buf_valid(state.filter_buf) then
+    return vim.api.nvim_buf_get_lines(state.filter_buf, 0, 1, false)[1] or ''
+  end
+  return ''
+end
+
+function M.set_filter_text(text)
+  if buf_valid(state.filter_buf) then
+    vim.api.nvim_buf_set_lines(state.filter_buf, 0, -1, false, { text })
+    state.refresh_filter_placeholder()
+  end
+end
+
 function M.get_cursor_index()
   if state.results_win and vim.api.nvim_win_is_valid(state.results_win) then
     return vim.api.nvim_win_get_cursor(state.results_win)[1]
@@ -62,7 +159,7 @@ function M.get_cursor_index()
   return 1
 end
 
-function M.set_results(lines, cursor_index)
+function M.set_results(lines, cursor_index, keep_focus)
   if not state.results_buf or not vim.api.nvim_buf_is_valid(state.results_buf) then
     return
   end
@@ -73,8 +170,10 @@ function M.set_results(lines, cursor_index)
     local idx = math.min(cursor_index or 1, #lines)
     idx = math.max(idx, 1)
     vim.api.nvim_win_set_cursor(state.results_win, { idx, 0 })
-    vim.cmd('stopinsert')
-    vim.api.nvim_set_current_win(state.results_win)
+    if not keep_focus then
+      vim.cmd('stopinsert')
+      vim.api.nvim_set_current_win(state.results_win)
+    end
   end
 end
 
@@ -99,7 +198,7 @@ function M.set_empty(reference)
   M.set_results({ M.empty_message(reference) }, 1)
 end
 
-function M.open(on_submit, on_select, on_refresh)
+function M.open(on_submit, on_select, on_refresh, on_filter)
   local cfg = config.get()
   local editor_width = vim.o.columns
   local editor_height = vim.o.lines
@@ -110,7 +209,8 @@ function M.open(on_submit, on_select, on_refresh)
   local col = math.floor((editor_width - float_width) / 2)
 
   local prompt_height = 1
-  local results_height = float_height - prompt_height - 2
+  local filter_height = 1
+  local results_height = math.max(float_height - prompt_height - filter_height - 3, 1)
 
   state.prompt_buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_set_option_value('buftype', 'nofile', { buf = state.prompt_buf })
@@ -127,6 +227,21 @@ function M.open(on_submit, on_select, on_refresh)
     border = { '╭', '─', '╮', '│', '┤', '─', '├', '│' },
   })
 
+  state.filter_buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_set_option_value('buftype', 'nofile', { buf = state.filter_buf })
+  vim.api.nvim_set_option_value('bufhidden', 'wipe', { buf = state.filter_buf })
+  vim.api.nvim_set_option_value('swapfile', false, { buf = state.filter_buf })
+
+  state.filter_win = vim.api.nvim_open_win(state.filter_buf, false, {
+    relative = 'editor',
+    width = float_width,
+    height = filter_height,
+    row = row + prompt_height + 1,
+    col = col,
+    style = 'minimal',
+    border = { '├', '─', '┤', '│', '┤', '─', '├', '│' },
+  })
+
   state.results_buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_set_option_value('buftype', 'nofile', { buf = state.results_buf })
   vim.api.nvim_set_option_value('bufhidden', 'wipe', { buf = state.results_buf })
@@ -138,32 +253,29 @@ function M.open(on_submit, on_select, on_refresh)
     relative = 'editor',
     width = float_width,
     height = results_height,
-    row = row + prompt_height + 1,
+    row = row + prompt_height + filter_height + 2,
     col = col,
     style = 'minimal',
     border = { '├', '─', '┤', '│', '╯', '─', '╰', '│' },
   })
   vim.api.nvim_set_option_value('cursorline', true, { win = state.results_win })
 
-  local placeholder_ns = vim.api.nvim_create_namespace('liz_diff_placeholder')
-  vim.api.nvim_buf_set_extmark(state.prompt_buf, placeholder_ns, 0, 0, {
-    virt_text = { { 'Enter git ref, or #<PR> / !<MR>... ', 'Comment' } },
-    virt_text_pos = 'overlay',
-    hl_mode = 'combine',
-  })
+  local refresh_prompt_placeholder = attach_placeholder(state.prompt_buf, PROMPT_PLACEHOLDER)
+  state.refresh_filter_placeholder = attach_placeholder(state.filter_buf, FILTER_PLACEHOLDER)
+  refresh_prompt_placeholder()
+  state.refresh_filter_placeholder()
 
   vim.api.nvim_create_autocmd({ 'TextChangedI', 'TextChanged' }, {
     buffer = state.prompt_buf,
+    callback = refresh_prompt_placeholder,
+  })
+
+  vim.api.nvim_create_autocmd({ 'TextChangedI', 'TextChanged' }, {
+    buffer = state.filter_buf,
     callback = function()
-      local text = vim.api.nvim_buf_get_lines(state.prompt_buf, 0, 1, false)[1] or ''
-      if text ~= '' then
-        vim.api.nvim_buf_clear_namespace(state.prompt_buf, placeholder_ns, 0, -1)
-      else
-        vim.api.nvim_buf_set_extmark(state.prompt_buf, placeholder_ns, 0, 0, {
-          virt_text = { { 'Enter git ref, or #<PR> / !<MR>... ', 'Comment' } },
-          virt_text_pos = 'overlay',
-          hl_mode = 'combine',
-        })
+      state.refresh_filter_placeholder()
+      if on_filter then
+        on_filter(M.get_filter_text())
       end
     end,
   })
@@ -205,10 +317,25 @@ function M.open(on_submit, on_select, on_refresh)
     vim.cmd('startinsert')
   end, { buffer = state.results_buf })
 
-  vim.keymap.set('n', '/', function()
-    vim.api.nvim_set_current_win(state.prompt_win)
-    vim.cmd('startinsert')
-  end, { buffer = state.results_buf })
+  if cfg.keymap.filter then
+    vim.keymap.set('n', cfg.keymap.filter, function()
+      vim.api.nvim_set_current_win(state.filter_win)
+      vim.cmd('startinsert!')
+    end, { buffer = state.results_buf })
+  end
+
+  local function focus_results()
+    vim.cmd('stopinsert')
+    vim.api.nvim_set_current_win(state.results_win)
+  end
+
+  vim.keymap.set('i', '<CR>', focus_results, { buffer = state.filter_buf })
+  vim.keymap.set('i', '<Esc>', focus_results, { buffer = state.filter_buf })
+  vim.keymap.set('n', '<CR>', focus_results, { buffer = state.filter_buf })
+
+  for _, key in ipairs(cfg.keymap.close) do
+    vim.keymap.set('n', key, function() M.close() end, { buffer = state.filter_buf })
+  end
 
   M._set_files_ref = function(files)
     files_ref = files

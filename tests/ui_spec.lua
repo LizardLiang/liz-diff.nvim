@@ -91,6 +91,93 @@ describe('liz-diff.ui', function()
     end)
   end)
 
+  describe('filter_files()', function()
+    local function f(path)
+      return { status = 'M', filepath = path, insertions = 1, deletions = 0, binary = false }
+    end
+
+    local files = {
+      f('lua/liz-diff/init.lua'),
+      f('lua/liz-diff/UI.lua'),
+      f('README.md'),
+      f('docs/guide.md'),
+      f('tests/init.test.lua'),
+      f('Makefile'),
+    }
+
+    local function paths(list)
+      local out = {}
+      for _, file in ipairs(list) do
+        out[#out + 1] = file.filepath
+      end
+      return out
+    end
+
+    it('returns every file for an empty or blank query', function()
+      assert.are.equal(6, #ui.filter_files(files, ''))
+      assert.are.equal(6, #ui.filter_files(files, '   '))
+      assert.are.equal(6, #ui.filter_files(files, nil))
+    end)
+
+    it('matches a name term as a substring of the full path', function()
+      assert.are.same({ 'docs/guide.md' }, paths(ui.filter_files(files, 'docs')))
+      assert.are.same({ 'lua/liz-diff/init.lua', 'tests/init.test.lua' }, paths(ui.filter_files(files, 'init')))
+    end)
+
+    it('is case-insensitive for names and paths', function()
+      assert.are.same({ 'README.md' }, paths(ui.filter_files(files, 'readme')))
+      assert.are.same({ 'lua/liz-diff/UI.lua' }, paths(ui.filter_files(files, 'ui.LUA')))
+    end)
+
+    it('matches a .ext term against the end of the path', function()
+      assert.are.same({ 'README.md', 'docs/guide.md' }, paths(ui.filter_files(files, '.md')))
+      assert.are.equal(0, #ui.filter_files(files, '.mak'))
+    end)
+
+    it('treats *.ext like .ext', function()
+      assert.are.same({ 'README.md', 'docs/guide.md' }, paths(ui.filter_files(files, '*.md')))
+    end)
+
+    it('ORs multiple extension terms', function()
+      assert.are.same(
+        { 'lua/liz-diff/init.lua', 'lua/liz-diff/UI.lua', 'README.md', 'docs/guide.md', 'tests/init.test.lua' },
+        paths(ui.filter_files(files, '.lua .md'))
+      )
+    end)
+
+    it('ANDs a name term with an extension term', function()
+      assert.are.same({ 'lua/liz-diff/init.lua', 'tests/init.test.lua' }, paths(ui.filter_files(files, 'init .lua')))
+      assert.are.same({ 'tests/init.test.lua' }, paths(ui.filter_files(files, 'tests .lua')))
+    end)
+
+    it('ANDs multiple name terms', function()
+      assert.are.same({ 'lua/liz-diff/init.lua' }, paths(ui.filter_files(files, 'liz init')))
+    end)
+
+    it('treats special characters in name terms literally', function()
+      assert.are.same({ 'lua/liz-diff/init.lua', 'lua/liz-diff/UI.lua' }, paths(ui.filter_files(files, 'liz-diff')))
+      assert.are.same({ 'tests/init.test.lua' }, paths(ui.filter_files(files, 't.test')))
+      assert.are.equal(0, #ui.filter_files(files, 'init.l.a'))
+      assert.are.equal(0, #ui.filter_files(files, '%'))
+      assert.are.equal(0, #ui.filter_files(files, '[a-z]'))
+    end)
+
+    it('matches a multi-dot extension against the path end', function()
+      assert.are.same({ 'tests/init.test.lua' }, paths(ui.filter_files(files, '.test.lua')))
+    end)
+
+    it('preserves the original order', function()
+      local ordered = ui.filter_files({ f('b.lua'), f('a.lua'), f('c.lua') }, '.lua')
+      assert.are.same({ 'b.lua', 'a.lua', 'c.lua' }, paths(ordered))
+    end)
+  end)
+
+  describe('no_match_message()', function()
+    it('quotes the trimmed query', function()
+      assert.are.equal('No files match "foo .lua"', ui.no_match_message('  foo .lua '))
+    end)
+  end)
+
   -- Integration tests for open/close/set_results require Neovim runtime.
   -- Mark as pending for TDD — implement when running under plenary/vusted.
 
@@ -104,5 +191,7 @@ describe('liz-diff.ui', function()
   pending('results <CR> triggers on_select callback')
   pending('close keys close the float')
   pending('focus moves to results after submit')
-  pending('i or / in results refocuses prompt')
+  pending('i in results refocuses prompt')
+  pending('/ in results focuses the filter')
+  pending('typing in the filter narrows the results')
 end)

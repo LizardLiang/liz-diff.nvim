@@ -32,6 +32,7 @@
 - **Show both diff panes' paths** — `:LizDiffPaths` blinks each pane's absolute path above it for ~2s (on-disk files show the full path, reference panes show `<ref>:<path>`), useful when the pane titles alone aren't enough
 - **In-memory cache per keyword** — reopening the panel restores the last reference's results instantly
 - **Explicit refresh** — `<CR>` always re-fetches on submit, and `R` refreshes the results list in place without leaving the float
+- **Filter the file list** — press `/` in the results and type to narrow the list live by name or extension; `]f` / `[f` then walk only the filtered files
 - **Cursor position remembered** per keyword across re-opens
 - **Zero dependencies** beyond Neovim 0.9+ and git
 
@@ -77,10 +78,24 @@ Opens the floating window. Type a git reference in the prompt and press `<CR>` t
 | ------------- | --------------------------------------------- |
 | `<CR>`        | Open selected file in vimdiff                 |
 | `R`           | Refresh the file list for the current ref     |
+| `/`           | Focus the filter line (insert mode)           |
+| `i`           | Focus the git ref prompt (insert mode)        |
 | `j` / `k`     | Navigate the file list                        |
 | `<Esc>` / `q` | Close the float                               |
 
 Pressing `<CR>` in the prompt always re-runs `git diff` for the typed reference, even if it was already fetched this session — this keeps unstaged working-tree diffs current. Pressing `R` while the results list is focused re-runs `git diff` for the currently displayed reference without leaving the results window, preserving the cursor position. `R` is a no-op until a reference has been submitted at least once.
+
+### Filtering the file list
+
+The line between the prompt and the results is a live filter. Press `/` in the results to focus it, type, then press `<CR>` or `<Esc>` to return to the (already narrowed) list. Matching is case-insensitive and never uses Lua patterns:
+
+| Term             | Meaning                                                     |
+| ---------------- | ----------------------------------------------------------- |
+| `init`           | Path contains `init` (several name terms must all match)    |
+| `.lua`, `*.lua`  | Path ends with `.lua` (several extension terms are OR'ed)   |
+| `init .lua`      | Name terms AND extension terms combined                     |
+
+Terms are separated by whitespace. `<CR>` opens the file under the cursor in the filtered list, and `]f` / `[f` walk only the filtered files. The filter text is remembered with the cached list and restored when you reopen the panel. Submitting a new reference clears it, and `R` keeps it and reapplies it to the refreshed list.
 
 ### Navigating between files in the diff view
 
@@ -267,6 +282,7 @@ require('liz_diff').setup({
     close     = { '<Esc>', 'q' },
     open_diff = '<CR>',
     refresh   = 'R',
+    filter    = '/',    -- focus the filter line from the results (false to disable)
     next_file = ']f',   -- next file in the diff view (false to disable)
     prev_file = '[f',   -- previous file in the diff view (false to disable)
   },
@@ -280,7 +296,7 @@ require('liz_diff').setup({
 3. Results render as `<status> <path> +<insertions> -<deletions>`.
 4. Pressing `<CR>` on a file closes the float and opens a vertical vimdiff split. For a single ref, that's the working tree on the left and the reference version on the right; for a commit range (`a..b` / `a...b`) or a PR/MR keyword, both sides are read-only commit content instead — head on the left, base on the right — since a range or a PR compares two commits, not your working tree. The file list stays active, so `]f` / `[f` (or `:LizDiffNext` / `:LizDiffPrev`) cycle to sibling files without reopening the picker.
 5. Pressing `R` with the results list focused re-runs `git diff` for the currently displayed reference in place, preserving the cursor position (clamped to the new list length).
-6. Each successful fetch is cached in memory so closing and reopening the panel restores the last reference's results and cursor position without a git call.
+6. Each successful fetch is cached in memory so closing and reopening the panel restores the last reference's results, filter text and cursor position without a git call.
 
 ## License
 

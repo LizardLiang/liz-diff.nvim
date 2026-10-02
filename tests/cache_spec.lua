@@ -18,6 +18,37 @@ describe('liz-diff.cache', function()
     end)
   end)
 
+  describe('filter', function()
+    local files = {
+      { status = 'M', filepath = 'a.lua', insertions = 1, deletions = 0, binary = false },
+    }
+
+    it('defaults to an empty string', function()
+      cache.set('main', files)
+      assert.are.equal('', cache.get('main').filter)
+    end)
+
+    it('set_filter stores the text and resets the cursor', function()
+      cache.set('main', files)
+      cache.set_cursor('main', 5)
+      cache.set_filter('main', '.lua')
+      assert.are.equal('.lua', cache.get('main').filter)
+      assert.are.equal(1, cache.get('main').cursor_index)
+    end)
+
+    it('survives a re-set of the same keyword', function()
+      cache.set('main', files)
+      cache.set_filter('main', 'init')
+      cache.set('main', files)
+      assert.are.equal('init', cache.get('main').filter)
+    end)
+
+    it('set_filter on an unknown keyword is a no-op', function()
+      cache.set_filter('nope', 'x')
+      assert.is_nil(cache.get('nope'))
+    end)
+  end)
+
   describe('set()', function()
     it('stores files and initializes cursor_index to 1', function()
       local files = {

@@ -8,6 +8,7 @@ local config = {
     close = { '<Esc>', 'q' },
     open_diff = '<CR>',
     refresh = 'R',
+    filter = '/',
     next_file = ']f',
     prev_file = '[f',
   },

@@ -47,6 +47,9 @@ Features ~
       reference's results instantly.
     - Explicit refresh: <CR> always re-fetches on submit, and `R`
       refreshes the results list in place without leaving the float.
+    - Filter the file list: press `/` in the results and type to narrow
+      the list live by name or extension; ]f / [f walk only the filtered
+      files.
     - Cursor position remembered per keyword across re-opens.
     - Show both diff panes' paths: |:LizDiffPaths| blinks each pane's
       absolute (or `<ref>:<path>`) path above it for ~2s.
@@ -326,8 +329,28 @@ do not apply to |:LizDiffFile|, which has no float):
                    reference has been submitted at least once.
     j / k          Navigate the results list.
     <Esc> / q      Close the float.
-    i / /          From the results list, refocus the prompt for
+    i              From the results list, refocus the prompt for
                    insert mode.
+    /              From the results list, focus the filter line for
+                   insert mode (see |liz-diff-filter|).
+
+Filter ~
+                                                              *liz-diff-filter*
+The line between the prompt and the results is a live filter. Press `/` in
+the results to focus it and type; the list narrows as you type. <CR> or
+<Esc> returns to the results. Matching is case-insensitive, never uses Lua
+patterns, and splits the query on whitespace:
+
+    .ext or *.ext  Extension term: the path ends with `.ext`. Several
+                   extension terms are OR'ed.
+    other          Name term: the path contains the text. Several name
+                   terms are AND'ed.
+
+A file must satisfy any extension term (when present) and every name term.
+An empty filter shows all files. When nothing matches, the list shows
+`No files match "<query>"`. <CR> and ]f / [f use the filtered list. The
+filter text is cached with the file list and restored on reopen. Submitting
+a new reference clears it, and `R` keeps and reapplies it.
 
 These keymaps are active on the two diff panes after a file is opened
 (see |liz-diff-navigation|):
@@ -356,6 +379,7 @@ require('liz_diff').setup({opts})
         close     = { '<Esc>', 'q' },
         open_diff = '<CR>',
         refresh   = 'R',
+        filter    = '/',
         next_file = ']f',
         prev_file = '[f',
       },
@@ -378,6 +402,9 @@ require('liz_diff').setup({opts})
         keymap.refresh    (string) Key bound in the results buffer that
                     re-runs the diff for the current reference in place.
                     Default: `'R'`
+        keymap.filter     (string) Key bound in the results buffer that
+                    focuses the filter line. `false` disables it.
+                    Default: `'/'`
         keymap.next_file  (string) Key bound on the diff panes that opens
                     the next file in the list. `false` disables it.
                     Default: `']f'`

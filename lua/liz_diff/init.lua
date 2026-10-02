@@ -7,7 +7,7 @@ local pr = require('liz_diff.pr')
 
 local M = {}
 
-M._VERSION = "0.10.0"
+M._VERSION = "0.11.0"
 
 local state = {
   current_keyword = nil,
@@ -133,7 +133,26 @@ function M.open()
     return
   end
 
+  -- Unfiltered list for the current keyword, the filtered rows on screen
+  -- (what <CR> and ]f / [f walk), and the filter text last applied to them.
+  local all_files = nil
+  local shown_files = nil
+  local applied_filter = ''
+
+  local function show_files(files, cursor_index, keep_focus)
+    local query = ui.get_filter_text()
+    applied_filter = query
+    shown_files = ui.filter_files(files, query)
+    if #shown_files == 0 then
+      ui.set_results({ ui.no_match_message(query) }, 1, keep_focus)
+    else
+      ui.set_results(format_files(shown_files), cursor_index, keep_focus)
+    end
+    ui._set_files_ref(shown_files)
+  end
+
   local function run_diff(keyword, cursor_index)
+    all_files = nil
     for _, job_id in ipairs(state.active_jobs) do
       pcall(vim.fn.jobstop, job_id)
     end
@@ -172,8 +191,8 @@ function M.open()
         ui.set_empty(keyword)
       else
         cache.set(keyword, files, pr_info, root)
-        ui.set_results(format_files(files), cursor_index)
-        ui._set_files_ref(files)
+        all_files = files
+        show_files(files, cursor_index)
       end
     end
 
@@ -260,7 +279,18 @@ function M.open()
   end
 
   local function on_submit(keyword)
+    ui.set_filter_text('')
+    applied_filter = ''
+    cache.set_filter(keyword, '')
     run_diff(keyword, 1)
+  end
+
+  local function on_filter(text)
+    if text == applied_filter or not all_files then
+      return
+    end
+    cache.set_filter(state.current_keyword, text)
+    show_files(all_files, 1, true)
   end
 
   local function on_refresh()
@@ -279,28 +309,28 @@ function M.open()
     -- list from the mode/pr/range/root used to open it. The file's row index
     -- (not the file arg) drives navigation from here on.
     local idx = ui.get_cursor_index()
-    local cached = cache.get(state.current_keyword)
     state.nav = {
       keyword = state.current_keyword,
       root = state.current_root,
       mode = M.resolve_open_mode(state.current_pr, state.current_range, state.current_keyword),
       pr = state.current_pr,
       range = state.current_range,
-      files = cached and cached.files or { file },
+      files = shown_files or { file },
       index = idx,
     }
     ui.close()
     open_file_at(idx)
   end
 
-  ui.open(on_submit, on_select, on_refresh)
+  ui.open(on_submit, on_select, on_refresh, on_filter)
 
   if state.current_keyword then
     local cached = cache.get(state.current_keyword)
     if cached then
       ui.set_prompt_text(state.current_keyword)
-      ui.set_results(format_files(cached.files), cached.cursor_index)
-      ui._set_files_ref(cached.files)
+      ui.set_filter_text(cached.filter)
+      all_files = cached.files
+      show_files(cached.files, cached.cursor_index)
       -- Restore PR/range context (both nil for a raw ref) so a select from
       -- the restored list diffs head-vs-base without re-resolving. Routed
       -- through M.split_meta rather than assigned directly — see that
