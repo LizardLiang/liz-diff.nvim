@@ -442,6 +442,33 @@ describe('liz-diff picker wiring', function()
       assert.are.equal('a.lua', opened[1].path)
     end)
 
+    it('ignores the failed resolve of the stopped fetch', function()
+      local info = { number = 12, base_oid = 'b', head_oid = 'h' }
+      local resolves = {}
+      stub_pr({})
+      pr_module.resolve = function(_, _, callback)
+        resolves[#resolves + 1] = callback
+        return {}
+      end
+      liz.open()
+      local p = picker()
+      submit(p, '#12')
+      press(p.results, 'n', 'R')
+      assert.are.equal(2, #resolves)
+
+      resolves[1]('stopped')
+      assert.are.same({ 'Loading...' }, lines(p.results))
+      press(p.results, 'n', 'q')
+      liz.open()
+      p = picker()
+      assert.are.same({ 'Loading...' }, lines(p.results))
+
+      resolves[2](nil, info)
+      assert.are.equal(1, #fetches)
+      finish(1, nil, files3())
+      assert.are.equal(3, #lines(p.results))
+    end)
+
     it('ignores a commit check that finishes after the refresh', function()
       local info1 = { number = 12, base_oid = 'b1', head_oid = 'h1' }
       local info2 = { number = 12, base_oid = 'b2', head_oid = 'h2' }
@@ -465,6 +492,31 @@ describe('liz-diff picker wiring', function()
       select_row(p, 1)
       assert.are.equal(info2, opened[1].pr)
       assert.are.equal(info2, cache.get('#12').meta)
+    end)
+  end)
+
+  describe('a fetch superseded by another reference', function()
+    it('still fills the cache for its own reference', function()
+      liz.open()
+      local p = picker()
+      submit(p, 'main')
+      submit(p, 'dev')
+      finish(1, nil, files3())
+
+      assert.are.equal(3, #cache.get('main').files)
+      assert.are.same({ 'Loading...' }, lines(p.results))
+    end)
+
+    it('does not overwrite a newer list cached for its reference', function()
+      liz.open()
+      local p = picker()
+      submit(p, 'main')
+      press(p.results, 'n', 'R')
+      finish(2, nil, files3())
+      submit(p, 'dev')
+      finish(1, nil, { f('old.lua') })
+
+      assert.are.equal(3, #cache.get('main').files)
     end)
   end)
 

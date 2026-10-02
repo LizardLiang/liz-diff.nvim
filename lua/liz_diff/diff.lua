@@ -398,7 +398,8 @@ end
 -- stack overlays, then re-renders and re-schedules the auto-clear. A fresh
 -- invocation supersedes any prior invocation's pending auto-clear (via
 -- paths_generation) so the newest overlay always gets its own full
--- PATHS_BLINK_MS lifetime instead of being cut short by a stale timer. INFO no-op when no window in the current tabpage has 'diff' set.
+-- PATHS_BLINK_MS lifetime instead of being cut short by a stale timer. INFO
+-- no-op when no window in the current tabpage has 'diff' set.
 function M.show_paths()
   local bufs = {}
   for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
