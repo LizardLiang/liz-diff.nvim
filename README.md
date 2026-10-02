@@ -282,7 +282,7 @@ require('liz_diff').setup({
     close     = { '<Esc>', 'q' },
     open_diff = '<CR>',
     refresh   = 'R',
-    filter    = '/',    -- focus the filter line from the results (false to disable)
+    filter    = '/',    -- focus the filter line from the results (false leaves / as Neovim's search)
     next_file = ']f',   -- next file in the diff view (false to disable)
     prev_file = '[f',   -- previous file in the diff view (false to disable)
   },

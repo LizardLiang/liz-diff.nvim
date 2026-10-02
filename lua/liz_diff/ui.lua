@@ -9,6 +9,9 @@ local state = {
   results_win = nil,
   filter_buf = nil,
   filter_win = nil,
+  files = {},
+  picker_id = 0,
+  closing = false,
   refresh_filter_placeholder = function() end,
 }
 
@@ -92,10 +95,7 @@ local function attach_placeholder(buf, text)
 end
 
 function M.is_open()
-  return state.prompt_win ~= nil
-    and vim.api.nvim_win_is_valid(state.prompt_win)
-    and state.results_win ~= nil
-    and vim.api.nvim_win_is_valid(state.results_win)
+  return win_valid(state.prompt_win) and win_valid(state.results_win) and win_valid(state.filter_win)
 end
 
 function M.focus()
@@ -106,6 +106,7 @@ function M.focus()
 end
 
 function M.close()
+  state.closing = true
   if state.prompt_win and vim.api.nvim_win_is_valid(state.prompt_win) then
     vim.api.nvim_win_close(state.prompt_win, true)
   end
@@ -130,6 +131,8 @@ function M.close()
   state.prompt_win = nil
   state.results_buf = nil
   state.results_win = nil
+  state.files = {}
+  state.closing = false
 end
 
 function M.set_prompt_text(text)
@@ -181,6 +184,22 @@ function M.set_results(lines, cursor_index, keep_focus)
   end
 end
 
+-- Files behind the result rows, indexed by row. This is the one list <CR>
+-- selects from; message rows carry none.
+function M.set_files(files)
+  state.files = files
+end
+
+function M.get_files()
+  return state.files
+end
+
+-- Shows non-selectable message rows.
+function M.set_message(lines, keep_focus)
+  state.files = {}
+  M.set_results(lines, 1, keep_focus)
+end
+
 function M.set_error(message)
   local lines = vim.split(message, '\n', { trimempty = true })
   if #lines == 0 then
@@ -189,7 +208,7 @@ function M.set_error(message)
   for i, line in ipairs(lines) do
     lines[i] = 'Error: ' .. line
   end
-  M.set_results(lines, 1)
+  M.set_message(lines)
 end
 
 -- Pure message builder, extracted from set_empty() so the wording can be
@@ -199,10 +218,13 @@ function M.empty_message(reference)
 end
 
 function M.set_empty(reference)
-  M.set_results({ M.empty_message(reference) }, 1)
+  M.set_message({ M.empty_message(reference) })
 end
 
 function M.open(on_submit, on_select, on_refresh, on_filter)
+  M.close()
+  state.picker_id = state.picker_id + 1
+  local picker_id = state.picker_id
   local cfg = config.get()
   local editor_width = vim.o.columns
   local editor_height = vim.o.lines
@@ -284,8 +306,6 @@ function M.open(on_submit, on_select, on_refresh, on_filter)
     end,
   })
 
-  local files_ref = {}
-
   local function submit()
     local text = vim.api.nvim_buf_get_lines(state.prompt_buf, 0, 1, false)[1] or ''
     text = vim.trim(text)
@@ -301,8 +321,8 @@ function M.open(on_submit, on_select, on_refresh, on_filter)
 
   local function select_file()
     local idx = vim.api.nvim_win_get_cursor(state.results_win)[1]
-    if files_ref[idx] then
-      on_select(files_ref[idx])
+    if state.files[idx] then
+      on_select(state.files[idx])
     end
   end
 
@@ -341,8 +361,22 @@ function M.open(on_submit, on_select, on_refresh, on_filter)
     vim.keymap.set('n', key, function() M.close() end, { buffer = state.filter_buf })
   end
 
-  M._set_files_ref = function(files)
-    files_ref = files
+  -- Closing any one of the three floats closes the picker.
+  for _, win in ipairs({ state.prompt_win, state.filter_win, state.results_win }) do
+    vim.api.nvim_create_autocmd('WinClosed', {
+      pattern = tostring(win),
+      once = true,
+      callback = function()
+        if state.closing then
+          return
+        end
+        vim.schedule(function()
+          if state.picker_id == picker_id then
+            M.close()
+          end
+        end)
+      end,
+    })
   end
 
   vim.cmd('startinsert')

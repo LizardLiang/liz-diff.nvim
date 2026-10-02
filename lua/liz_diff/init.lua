@@ -15,14 +15,23 @@ local state = {
   current_range = nil,
   current_root = nil,
   -- The active :LizDiffNext/:LizDiffPrev session: nil until on_select() first
-  -- arms it. A frozen snapshot — { keyword, root, mode, pr, range, files,
-  -- index } — taken ONCE at selection time, not re-derived from the live
-  -- current_* fields above on every ]f/[f. Without this freeze, submitting a
-  -- new keyword (without selecting from its results) would silently swap the
-  -- meta/mode used by ]f/[f out from under an already-armed session for a
-  -- DIFFERENT keyword's file list (Hermes SUGGESTION 1).
+  -- arms it. A frozen snapshot -- { keyword, root, mode, pr, range, files,
+  -- index, filter } -- taken ONCE at selection time, not re-derived from the
+  -- live current_* fields above on every ]f/[f. Without this freeze,
+  -- submitting a new keyword (without selecting from its results) would
+  -- silently swap the meta/mode used by ]f/[f out from under an already-armed
+  -- session for a DIFFERENT keyword's file list.
   nav = nil,
   active_jobs = {},
+}
+
+-- Picker model, shared by every open so a fetch that finishes after the picker
+-- was closed and reopened still updates the live one. `all_files` is the
+-- unfiltered list for the current keyword and `applied_filter` the filter text
+-- last applied to it. The filtered rows on screen live in ui (ui.get_files).
+local model = {
+  all_files = nil,
+  applied_filter = '',
 }
 
 function M.setup(opts)
@@ -92,12 +101,13 @@ function M.split_meta(meta)
 end
 
 -- Opens the diff for the file at `index` in the FROZEN nav session
--- (state.nav — see its declaration above for why it's frozen rather than
+-- (state.nav -- see its declaration above for why it's frozen rather than
 -- read live from state.current_*). Wraps the index into range first, records
 -- the new position, syncs the picker's cached cursor so a reopen lands on
--- this file, dispatches through M.resolve_open_mode's mode (captured in the
--- nav session at select time) to diff.open_pr / diff.open_commits /
--- diff.open, and echoes `path (i/n)`.
+-- this file (only while the cached filter is the one the list was built
+-- with, since the cursor indexes the filtered rows), dispatches through
+-- M.resolve_open_mode's mode (captured in the nav session at select time) to
+-- diff.open_pr / diff.open_commits / diff.open, and echoes `path (i/n)`.
 local function open_file_at(index)
   local nav = state.nav
   if not nav or not nav.files or #nav.files == 0 then
@@ -107,7 +117,10 @@ local function open_file_at(index)
   index = M.wrap_index(index, n)
   nav.index = index
   local file = nav.files[index]
-  cache.set_cursor(nav.keyword, index)
+  local cached = cache.get(nav.keyword)
+  if cached and cached.filter == nav.filter then
+    cache.set_cursor(nav.keyword, index)
+  end
 
   if nav.mode == 'pr' then
     diff.open_pr(nav.pr, file, nav.root)
@@ -133,33 +146,25 @@ function M.open()
     return
   end
 
-  -- Unfiltered list for the current keyword, the filtered rows on screen
-  -- (what <CR> and ]f / [f walk), and the filter text last applied to them.
-  local all_files = nil
-  local shown_files = nil
-  local applied_filter = ''
-
   local function show_files(files, cursor_index, keep_focus)
     local query = ui.get_filter_text()
-    applied_filter = query
-    shown_files = ui.filter_files(files, query)
-    if #shown_files == 0 then
-      ui.set_results({ ui.no_match_message(query) }, 1, keep_focus)
+    model.applied_filter = query
+    local shown = ui.filter_files(files, query)
+    if #shown == 0 then
+      ui.set_message({ ui.no_match_message(query) }, keep_focus)
     else
-      ui.set_results(format_files(shown_files), cursor_index, keep_focus)
+      ui.set_files(shown)
+      ui.set_results(format_files(shown), cursor_index, keep_focus)
     end
-    ui._set_files_ref(shown_files)
   end
 
-  local function clear_shown()
-    all_files = nil
-    shown_files = nil
-    ui._set_files_ref({})
+  local function show_loading()
+    model.all_files = nil
+    ui.set_message({ 'Loading...' }, true)
   end
 
   local function run_diff(keyword, cursor_index)
-    all_files = nil
-    shown_files = nil
+    show_loading()
     for _, job_id in ipairs(state.active_jobs) do
       pcall(vim.fn.jobstop, job_id)
     end
@@ -174,7 +179,6 @@ function M.open()
     if not root then
       state.current_pr = nil
       state.current_range = nil
-      ui._set_files_ref({})
       ui.set_error('liz-diff: could not resolve repository root')
       return
     end
@@ -193,17 +197,17 @@ function M.open()
       end
       state.active_jobs = {}
       if err then
-        clear_shown()
+        model.all_files = nil
         ui.set_error(err)
       elseif #files == 0 then
-        clear_shown()
+        model.all_files = nil
         ui.set_empty(keyword)
       else
         cache.set(keyword, files, pr_info, root)
         if ui.is_open() then
           cache.set_filter(keyword, ui.get_filter_text())
         end
-        all_files = files
+        model.all_files = files
         show_files(files, cursor_index, ui.is_filter_focused())
       end
     end
@@ -292,20 +296,20 @@ function M.open()
 
   local function on_submit(keyword)
     ui.set_filter_text('')
-    applied_filter = ''
+    model.applied_filter = ''
     cache.set_filter(keyword, '')
     run_diff(keyword, 1)
   end
 
   local function on_filter(text)
-    if text == applied_filter then
+    if text == model.applied_filter then
       return
     end
     cache.set_filter(state.current_keyword, text)
-    if not all_files then
+    if not model.all_files then
       return
     end
-    show_files(all_files, 1, true)
+    show_files(model.all_files, 1, true)
   end
 
   local function on_refresh()
@@ -316,13 +320,12 @@ function M.open()
     run_diff(state.current_keyword, idx)
   end
 
-  local function on_select(file)
-    -- Arms state.nav — the FROZEN nav session :LizDiffNext / ]f read from
-    -- (see its declaration) — from the CURRENT current_*/keyword fields, all
-    -- captured together in one snapshot so a later submit for a different
-    -- keyword (without selecting from ITS results) can't desync the file
-    -- list from the mode/pr/range/root used to open it. The file's row index
-    -- (not the file arg) drives navigation from here on.
+  local function on_select()
+    -- Arms state.nav (the FROZEN nav session :LizDiffNext / ]f read from) from
+    -- the CURRENT current_*/keyword fields, all captured together in one
+    -- snapshot so a later submit for a different keyword (without selecting
+    -- from ITS results) can't desync the file list from the mode/pr/range/root
+    -- used to open it. The file's row index drives navigation from here on.
     local idx = ui.get_cursor_index()
     state.nav = {
       keyword = state.current_keyword,
@@ -330,13 +333,16 @@ function M.open()
       mode = M.resolve_open_mode(state.current_pr, state.current_range, state.current_keyword),
       pr = state.current_pr,
       range = state.current_range,
-      files = shown_files or { file },
+      files = ui.get_files(),
+      filter = model.applied_filter,
       index = idx,
     }
     ui.close()
     open_file_at(idx)
   end
 
+  model.all_files = nil
+  model.applied_filter = ''
   ui.open(on_submit, on_select, on_refresh, on_filter)
 
   if state.current_keyword then
@@ -344,13 +350,12 @@ function M.open()
     if cached then
       ui.set_prompt_text(state.current_keyword)
       ui.set_filter_text(cached.filter)
-      all_files = cached.files
+      model.all_files = cached.files
       show_files(cached.files, cached.cursor_index)
       -- Restore PR/range context (both nil for a raw ref) so a select from
       -- the restored list diffs head-vs-base without re-resolving. Routed
-      -- through M.split_meta rather than assigned directly — see that
-      -- function's doc for why a direct `state.current_pr = cached.meta`
-      -- here is wrong for a cached RANGE session (Hermes M1).
+      -- through M.split_meta: a direct `state.current_pr = cached.meta` would
+      -- put a cached RANGE meta into the PR slot.
       state.current_pr, state.current_range = M.split_meta(cached.meta)
       -- Restore the root recorded when this list was fetched, so a selection
       -- from the restored (cached) list scopes to the same repo even if

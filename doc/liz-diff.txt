@@ -403,7 +403,8 @@ require('liz_diff').setup({opts})
                     re-runs the diff for the current reference in place.
                     Default: `'R'`
         keymap.filter     (string) Key bound in the results buffer that
-                    focuses the filter line. `false` disables it.
+                    focuses the filter line. `false` disables it,
+                    leaving `/` as Neovim's native search.
                     Default: `'/'`
         keymap.next_file  (string) Key bound on the diff panes that opens
                     the next file in the list. `false` disables it.
